@@ -812,11 +812,24 @@ fileRoutes.get('/:jid/files/preview/:path', authMiddleware, (c) => {
       disposition = `attachment; filename="${encodeURIComponent(fileName)}"`;
     }
 
+    // 预览经公网链路往返很慢：用大小+修改时间做 ETag，浏览器 5 分钟内直接用缓存，
+    // 之后带 If-None-Match 重新验证，没变就回 304、不再传整个文件。
+    const etag = `W/"${fileSize.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
     const commonHeaders = {
       ...securityHeaders,
       'Content-Type': contentType,
       'Content-Disposition': disposition,
+      'Cache-Control': 'private, max-age=300',
+      ETag: etag,
+      'Last-Modified': stats.mtime.toUTCString(),
     };
+    const ifNoneMatch = c.req.header('if-none-match');
+    if (
+      ifNoneMatch &&
+      ifNoneMatch.split(',').some((tag) => tag.trim() === etag)
+    ) {
+      return new Response(null, { status: 304, headers: commonHeaders });
+    }
 
     // 流媒体类型：支持 Range 请求（浏览器 <video>/<audio> seek 依赖此机制）
     if (isStreamable) {
