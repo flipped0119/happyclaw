@@ -1517,9 +1517,7 @@ describe('process visibility in the real output handlers (behavioural)', () => {
         `${mode}/${level}`,
       ).toBe(mode === 'assistant');
     }
-    // Six full mode/level runs: about 4–5 s alone, over the 5 s default on
-    // a busy machine.
-  }, 20_000);
+  });
 
   test("a proactive turn's trace is hung on the chats its utterances live in", () => {
     const globals: Record<string, any> = {

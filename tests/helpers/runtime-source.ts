@@ -44,19 +44,51 @@ function unique(root: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node {
   return matches[0];
 }
 
+function isNamedDeclaration(
+  node: ts.Node,
+): node is
+  | ts.FunctionDeclaration
+  | ts.VariableDeclaration
+  | ts.ClassDeclaration {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isVariableDeclaration(node) ||
+    ts.isClassDeclaration(node)
+  );
+}
+
+// Declarations by name, per root: index.ts is large, and walking all of it
+// for every lookup made each harness cost about a second.
+const declarationIndexes = new WeakMap<ts.Node, Map<string, ts.Node[]>>();
+
 function named(
   name: string,
   source: ts.SourceFile,
   root: ts.Node = source,
 ): ts.Node {
-  return unique(
-    root,
-    (node) =>
-      (ts.isFunctionDeclaration(node) ||
-        ts.isVariableDeclaration(node) ||
-        ts.isClassDeclaration(node)) &&
-      node.name?.getText(source) === name,
-  );
+  let index = declarationIndexes.get(root);
+  if (!index) {
+    const built = new Map<string, ts.Node[]>();
+    const visit = (node: ts.Node): void => {
+      if (isNamedDeclaration(node) && node.name) {
+        const key = node.name.getText(source);
+        const list = built.get(key);
+        if (list) list.push(node);
+        else built.set(key, [node]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+    declarationIndexes.set(root, built);
+    index = built;
+  }
+  const matches = index.get(name) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected one production function, found ${matches.length}`,
+    );
+  }
+  return matches[0];
 }
 
 /**
