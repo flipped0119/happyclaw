@@ -37,8 +37,8 @@ import {
   type TeamRule,
 } from '../../work-items';
 
+/** Mount it to open it; `onClose` unmounts it. */
 interface TeamModeDialogProps {
-  open: boolean;
   workspaceJid: string;
   channelJid: string;
   /** Shown until the mount loads. */
@@ -52,7 +52,6 @@ interface TeamModeDialogProps {
  * Dialog is a bottom sheet.
  */
 export function TeamModeDialog({
-  open,
   workspaceJid,
   channelJid,
   channelName,
@@ -65,12 +64,7 @@ export function TeamModeDialog({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
-    setMount(null);
-    setDraft(null);
-    setLoadError(null);
-    setSaveError(null);
     fetchTeamMounts(workspaceJid)
       .then((mounts) => {
         if (cancelled) return;
@@ -88,7 +82,7 @@ export function TeamModeDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, workspaceJid, channelJid]);
+  }, [workspaceJid, channelJid]);
 
   const dirty = useMemo(
     () =>
@@ -130,9 +124,7 @@ export function TeamModeDialog({
     setSaving(true);
     setSaveError(null);
     try {
-      const saved = await saveTeamMount(workspaceJid, channelJid, draft);
-      setMount(saved);
-      setDraft(toSettingsDraft(saved.settings));
+      await saveTeamMount(workspaceJid, channelJid, draft);
       toast.success('团队模式已保存');
       onClose();
     } catch (err) {
@@ -147,7 +139,7 @@ export function TeamModeDialog({
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={(value) => {
         if (!value) void close();
       }}

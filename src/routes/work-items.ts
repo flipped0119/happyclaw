@@ -40,13 +40,14 @@ const workItemRoutes = new Hono<{ Variables: Variables }>();
 
 const NOT_FOUND = '工作区不存在';
 const ITEM_NOT_FOUND = '工作项不存在';
-const DECISION_KINDS = new Set<WorkDecisionKind>([
-  'accept',
-  'attach',
-  'stop',
-  'ignore',
-  'would_accept',
-]);
+// A Record so a new decision kind fails to compile until it is listed.
+const DECISION_KINDS: Record<WorkDecisionKind, true> = {
+  accept: true,
+  attach: true,
+  stop: true,
+  ignore: true,
+  would_accept: true,
+};
 
 /** The caller's own workspace, or null (missing, someone else's, Host without admin). */
 function ownedWorkspace(
@@ -169,7 +170,7 @@ workItemRoutes.get(
     const jid = param(c, 'jid');
     if (!ownedWorkspace(user, jid)) return c.json({ error: NOT_FOUND }, 404);
     const kind = c.req.query('kind') || undefined;
-    if (kind !== undefined && !DECISION_KINDS.has(kind as WorkDecisionKind))
+    if (kind !== undefined && !Object.hasOwn(DECISION_KINDS, kind))
       return c.json({ error: '请求格式不正确' }, 400);
     return c.json({
       decisions: listWorkDecisionsForWorkspace(jid, {

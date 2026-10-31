@@ -15,6 +15,7 @@ import { useImBindings } from './hooks/useImBindings';
 import { ImBindingRow } from './ImBindingRow';
 import { BindingTargetDialog } from './BindingTargetDialog';
 import { TeamModeDialog } from '../team/TeamModeDialog';
+import { teamModeWorkspaceOf } from '../../lib/team-mode';
 import { api } from '../../api/client';
 import type { AvailableImGroup } from '../../types';
 import type { BindingTarget } from './hooks/useImBindings';
@@ -65,10 +66,8 @@ export function BindingsSection() {
   const [resetAllowlistGroup, setResetAllowlistGroup] =
     useState<AvailableImGroup | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<AvailableImGroup | null>(null);
-  const [teamTarget, setTeamTarget] = useState<{
-    group: AvailableImGroup;
-    workspaceJid: string;
-  } | null>(null);
+  const [teamGroup, setTeamGroup] = useState<AvailableImGroup | null>(null);
+  const teamWorkspaceJid = teamGroup && teamModeWorkspaceOf(teamGroup);
 
   const channels: { key: ChannelFilter; label: string; count: number }[] =
     useMemo(() => {
@@ -489,9 +488,7 @@ export function BindingsSection() {
                         onActivationModeChange={handleActivationModeChange}
                         onAudienceModeChange={handleAudienceModeChange}
                         onDelete={handleDelete}
-                        onTeamMode={(group, workspaceJid) =>
-                          setTeamTarget({ group, workspaceJid })
-                        }
+                        onTeamMode={setTeamGroup}
                       />
                     ))}
                   </ListGroup>
@@ -502,13 +499,12 @@ export function BindingsSection() {
         )}
       </SettingsSection>
 
-      {teamTarget && (
+      {teamGroup && teamWorkspaceJid && (
         <TeamModeDialog
-          open
-          workspaceJid={teamTarget.workspaceJid}
-          channelJid={teamTarget.group.jid}
-          channelName={teamTarget.group.name}
-          onClose={() => setTeamTarget(null)}
+          workspaceJid={teamWorkspaceJid}
+          channelJid={teamGroup.jid}
+          channelName={teamGroup.name}
+          onClose={() => setTeamGroup(null)}
         />
       )}
 

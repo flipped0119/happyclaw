@@ -3,10 +3,11 @@ import { create } from 'zustand';
 
 import { api, type ApiError } from '../api/client';
 import { wsManager } from '../api/ws';
-import type {
-  TeamMountView,
-  TeamSettingsDraft,
-  WorkItemDetail,
+import {
+  WORK_RECENT_LIMIT,
+  type TeamMountView,
+  type TeamSettingsDraft,
+  type WorkItemDetail,
 } from '../lib/team-mode';
 import type {
   WorkDecision,
@@ -18,15 +19,14 @@ import type {
 // group mounts' settings, for the 工作项 page, the settings dialog and the
 // session tree's tags.
 
-/** Ended items and recorded decisions shown per workspace. */
-const RECENT_LIMIT = 20;
-
 interface WorkItemsState {
   items: Record<string, WorkItemView>;
   /** `would_accept` decisions per workspace, newest first. */
   decisions: Record<string, WorkDecision[]>;
   details: Record<string, WorkItemDetail>;
-  /** Workspaces whose lists were fetched (or are being fetched). */
+  /** Workspaces the page loads; a reconnect reloads them. */
+  pageWorkspaces: string[];
+  /** Workspaces whose open items the session tree fetched. */
   requested: Record<string, true>;
   loaded: boolean;
   loading: boolean;
@@ -46,21 +46,23 @@ interface WorkItemsState {
 
 const enc = encodeURIComponent;
 
+function fetchItems(jid: string, query: string) {
+  return api
+    .get<{
+      items: WorkItemView[];
+    }>(`/api/workspaces/${enc(jid)}/work-items?${query}`)
+    .then((data) => data.items);
+}
+
 async function fetchWorkspace(jid: string) {
-  const base = `/api/workspaces/${enc(jid)}`;
   const [open, ended, decisions] = await Promise.all([
-    api.get<{ items: WorkItemView[] }>(`${base}/work-items?status=open`),
-    api.get<{ items: WorkItemView[] }>(
-      `${base}/work-items?status=ended&limit=${RECENT_LIMIT}`,
-    ),
+    fetchItems(jid, 'status=open'),
+    fetchItems(jid, `status=ended&limit=${WORK_RECENT_LIMIT}`),
     api.get<{ decisions: WorkDecision[] }>(
-      `${base}/work-decisions?kind=would_accept&limit=${RECENT_LIMIT}`,
+      `/api/workspaces/${enc(jid)}/work-decisions?kind=would_accept&limit=${WORK_RECENT_LIMIT}`,
     ),
   ]);
-  return {
-    items: [...open.items, ...ended.items],
-    decisions: decisions.decisions,
-  };
+  return { items: [...open, ...ended], decisions: decisions.decisions };
 }
 
 // WS events refetch an open detail at most once per burst.
@@ -99,6 +101,7 @@ export const useWorkItemsStore = create<WorkItemsState>((set, get) => {
     items: {},
     decisions: {},
     details: {},
+    pageWorkspaces: [],
     requested: {},
     loaded: false,
     loading: false,
@@ -106,13 +109,7 @@ export const useWorkItemsStore = create<WorkItemsState>((set, get) => {
     busy: {},
 
     load: async (workspaceJids) => {
-      set((state) => ({
-        loading: true,
-        requested: {
-          ...state.requested,
-          ...Object.fromEntries(workspaceJids.map((jid) => [jid, true])),
-        },
-      }));
+      set({ loading: true, pageWorkspaces: workspaceJids });
       const results = await Promise.allSettled(
         workspaceJids.map(async (jid) => ({
           jid,
@@ -125,16 +122,21 @@ export const useWorkItemsStore = create<WorkItemsState>((set, get) => {
           result.status === 'rejected' &&
           (result.reason as ApiError)?.status !== 404,
       );
+      const fetched = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : [],
+      );
+      const replaced = new Set(fetched.map((result) => result.jid));
       set((state) => {
-        const items = { ...state.items };
+        // A fetched workspace's list replaces what the store had for it.
+        const items = Object.fromEntries(
+          Object.entries(state.items).filter(
+            ([, item]) => !replaced.has(item.workspaceJid),
+          ),
+        );
         const decisions = { ...state.decisions };
-        for (const result of results) {
-          if (result.status !== 'fulfilled') continue;
-          const { jid } = result.value;
-          for (const [id, item] of Object.entries(items))
-            if (item.workspaceJid === jid) delete items[id];
-          for (const item of result.value.items) items[item.id] = item;
-          decisions[jid] = result.value.decisions;
+        for (const result of fetched) {
+          for (const item of result.items) items[item.id] = item;
+          decisions[result.jid] = result.decisions;
         }
         return {
           items,
@@ -153,8 +155,9 @@ export const useWorkItemsStore = create<WorkItemsState>((set, get) => {
       set((state) => ({
         requested: { ...state.requested, [workspaceJid]: true },
       }));
-      void fetchWorkspace(workspaceJid)
-        .then(({ items }) =>
+      // A worker's tag needs only the open items.
+      void fetchItems(workspaceJid, 'status=open')
+        .then((items) =>
           set((state) => ({
             items: {
               ...Object.fromEntries(items.map((item) => [item.id, item])),
@@ -216,8 +219,8 @@ export function useWorkItemSubscription(): void {
       ),
       // Events missed while the socket was down.
       wsManager.on('connected', (data: { reconnect?: boolean }) => {
-        const { loaded, requested, load } = useWorkItemsStore.getState();
-        if (data?.reconnect && loaded) void load(Object.keys(requested));
+        const { loaded, pageWorkspaces, load } = useWorkItemsStore.getState();
+        if (data?.reconnect && loaded) void load(pageWorkspaces);
       }),
     ];
     return () => unsubs.forEach((unsub) => unsub());

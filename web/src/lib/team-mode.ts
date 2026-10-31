@@ -1,4 +1,5 @@
-import type { AvailableImGroup } from '../types';
+import type { AgentInfo, AvailableImGroup } from '../types';
+import { hasBindingPolicyMismatch } from '../utils/im-binding-policy';
 import type {
   AdmissionOutcome,
   AdmissionTable,
@@ -52,6 +53,9 @@ export interface WorkItemDetail {
   events: WorkEvent[];
   subscriptions: { channelJid: string; subKey: string }[];
 }
+
+/** Ended items and recorded decisions fetched per workspace and shown. */
+export const WORK_RECENT_LIMIT = 20;
 
 /** Rule names stay short; the server allows 60 characters (src/schemas.ts). */
 export const TEAM_RULE_NAME_LIMIT = 60;
@@ -246,7 +250,15 @@ export function teamSettingsProblem(draft: TeamSettingsDraft): string | null {
 export function teamModeWorkspaceOf(group: AvailableImGroup): string | null {
   if (group.channel_type !== 'feishu' || group.conversation_kind !== 'group')
     return null;
+  if (hasBindingPolicyMismatch(group)) return null;
   if (group.bound_session_id ?? group.bound_agent_id) return null;
   const workspaceJid = group.bound_workspace_jid ?? group.bound_main_jid;
   return workspaceJid?.startsWith('web:') ? workspaceJid : null;
+}
+
+/** The router and worker sessions team mode opens. */
+export function isTeamSession(session: Pick<AgentInfo, 'source_kind'>) {
+  return (
+    session.source_kind === 'team_router' || session.source_kind === 'work_item'
+  );
 }

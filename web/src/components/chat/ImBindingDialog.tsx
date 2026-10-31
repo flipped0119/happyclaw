@@ -1071,7 +1071,6 @@ export function ImBindingDialog({
 
       {teamGroup && (
         <TeamModeDialog
-          open
           workspaceJid={groupJid}
           channelJid={teamGroup.jid}
           channelName={teamGroup.name}

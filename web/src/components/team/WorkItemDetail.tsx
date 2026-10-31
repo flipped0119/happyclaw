@@ -47,32 +47,31 @@ function requesterText(item: WorkItemView): string {
   return `${who}（${role}）`;
 }
 
-async function stopWithConfirm(item: WorkItemView) {
-  const confirmed = await confirmDialog({
-    title: `停止 ${workItemTitle(item)}？`,
-    message: '执行会话会被中断，工作项记为已停止。之后群里的回复不会再恢复它。',
-    confirmText: '停止',
-    variant: 'danger',
-  });
+/** Confirm, then stop or approve; a failure becomes a toast. */
+async function confirmAction(item: WorkItemView, action: 'stop' | 'approve') {
+  const title = workItemTitle(item);
+  const confirmed = await confirmDialog(
+    action === 'stop'
+      ? {
+          title: `停止 ${title}？`,
+          message:
+            '执行会话会被中断，工作项记为已停止。之后群里的回复不会再恢复它。',
+          confirmText: '停止',
+          variant: 'danger',
+        }
+      : {
+          title: `批准 ${title} 修改？`,
+          message: '批准后，执行会话可以修改文件、提交和推送代码。',
+          confirmText: '批准修改',
+        },
+  );
   if (!confirmed) return;
   try {
-    await useWorkItemsStore.getState().stop(item.id);
+    await useWorkItemsStore.getState()[action](item.id);
   } catch (err) {
-    toast.error(`停止失败：${extractErrorMessage(err)}`);
-  }
-}
-
-async function approveWithConfirm(item: WorkItemView) {
-  const confirmed = await confirmDialog({
-    title: `批准 ${workItemTitle(item)} 修改？`,
-    message: '批准后，执行会话可以修改文件、提交和推送代码。',
-    confirmText: '批准修改',
-  });
-  if (!confirmed) return;
-  try {
-    await useWorkItemsStore.getState().approve(item.id);
-  } catch (err) {
-    toast.error(`批准失败：${extractErrorMessage(err)}`);
+    toast.error(
+      `${action === 'stop' ? '停止' : '批准'}失败：${extractErrorMessage(err)}`,
+    );
   }
 }
 
@@ -110,13 +109,13 @@ export function WorkItemDetail({
     icon: Square,
     destructive: true,
     disabled: busy,
-    onSelect: () => void stopWithConfirm(item),
+    onSelect: () => void confirmAction(item, 'stop'),
   };
   const approveAction: MenuAction = {
     label: '批准修改',
     icon: Check,
     disabled: busy,
-    onSelect: () => void approveWithConfirm(item),
+    onSelect: () => void confirmAction(item, 'approve'),
   };
   const menuGroups: MenuAction[][] = [
     canApprove ? [approveAction] : [],
@@ -128,9 +127,7 @@ export function WorkItemDetail({
       event.kind === 'input' && event.triggerMessageId === item.sourceMessageId,
   );
   const reportState = (state: string | null) =>
-    state && state in WORK_REPORT_LABELS
-      ? WORK_REPORT_LABELS[state as WorkReportState]
-      : null;
+    WORK_REPORT_LABELS[state as WorkReportState] ?? null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -179,7 +176,7 @@ export function WorkItemDetail({
               <Button
                 size="sm"
                 disabled={busy}
-                onClick={() => void approveWithConfirm(item)}
+                onClick={() => void confirmAction(item, 'approve')}
               >
                 {busy ? <Loader2 className="animate-spin" /> : <Check />}
                 批准修改
@@ -317,7 +314,7 @@ export function WorkItemDetail({
                 <li key={event.id} className="space-y-0.5">
                   <p className="flex flex-wrap items-baseline gap-x-1.5 text-label text-foreground">
                     {WORK_EVENT_LABELS[event.kind] ?? event.kind}
-                    {event.kind === 'report' && reportState(event.state) && (
+                    {event.kind === 'report' && (
                       <span className="text-caption text-muted-foreground">
                         {reportState(event.state)}
                       </span>

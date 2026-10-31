@@ -4,6 +4,7 @@ import { ChevronRight, Link2, Play, Search, Timer, Trash2 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { TeamSessionTag } from '../../team/TeamSessionTag';
+import { isTeamSession } from '../../../lib/team-mode';
 import { useShellStore } from '../../../stores/shell';
 import { useAutomationsStore } from '../../../stores/automations';
 import { useIsGuest } from '../../../stores/auth';
@@ -138,7 +139,11 @@ export const SessionTreeList = memo(function SessionTreeList({
         linked={(session.linked_im_groups?.length ?? 0) > 0}
         worktree={session.worktree}
         automations={boundTo(session)}
-        tag={<TeamSessionTag workspaceJid={group.jid} session={session} />}
+        tag={
+          isTeamSession(session) && (
+            <TeamSessionTag workspaceJid={group.jid} session={session} />
+          )
+        }
         time={formatSessionTime(sessionActivityAt(session))}
         onSelect={() => openWorkspaceSession(navigate, group, session.id)}
         onDelete={

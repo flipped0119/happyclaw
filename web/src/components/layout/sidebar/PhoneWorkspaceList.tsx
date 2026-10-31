@@ -15,6 +15,7 @@ import { ChevronRight, Folder, Link2, Pin, Timer } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { TeamSessionTag } from '../../team/TeamSessionTag';
+import { isTeamSession } from '../../../lib/team-mode';
 import { useChatStore } from '../../../stores/chat';
 import { useAuthStore } from '../../../stores/auth';
 import { useGroupsStore } from '../../../stores/groups';
@@ -403,7 +404,11 @@ function WorkspaceSessions({
         linked={(session.linked_im_groups?.length ?? 0) > 0}
         worktree={session.worktree}
         automations={boundTo(session)}
-        tag={<TeamSessionTag workspaceJid={group.jid} session={session} />}
+        tag={
+          isTeamSession(session) && (
+            <TeamSessionTag workspaceJid={group.jid} session={session} />
+          )
+        }
         onOpen={() => open(session.id)}
         menu={
           canModify && !isNativeManagedSession(session)

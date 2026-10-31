@@ -96,13 +96,14 @@ function TeamSettingsPage() {
   return (
     <div className="p-4">
       <Button onClick={() => setOpen(true)}>打开团队模式</Button>
-      <TeamModeDialog
-        open={open}
-        workspaceJid="web:alpha"
-        channelJid="feishu:oc_team"
-        channelName="研发群"
-        onClose={() => setOpen(false)}
-      />
+      {open && (
+        <TeamModeDialog
+          workspaceJid="web:alpha"
+          channelJid="feishu:oc_team"
+          channelName="研发群"
+          onClose={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 }

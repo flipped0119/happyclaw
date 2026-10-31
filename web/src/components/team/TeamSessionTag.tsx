@@ -6,8 +6,8 @@ import { workItemHref } from '../../lib/team-mode';
 import type { AgentInfo } from '../../types';
 
 /**
- * 「团队路由」 or 「#N 工作项」 on a team-mode session in the session tree.
- * A work item's tag opens its detail.
+ * 「团队路由」 or 「#N 工作项」 on a team-mode session (`isTeamSession`) in the
+ * session tree. A work item's tag opens its detail.
  */
 export function TeamSessionTag({
   workspaceJid,
@@ -21,18 +21,10 @@ export function TeamSessionTag({
   const navigate = useNavigate();
   const isWorker = session.source_kind === 'work_item';
   const item = useWorkItemForSession(workspaceJid, session.id, isWorker);
-  if (session.source_kind === 'team_router')
-    return (
-      <Badge variant="outline" className={cn('shrink-0', className)}>
-        团队路由
-      </Badge>
-    );
-  if (!isWorker) return null;
-  const label = item ? `#${item.seq} 工作项` : '工作项';
   if (!item)
     return (
       <Badge variant="outline" className={cn('shrink-0', className)}>
-        {label}
+        {isWorker ? '工作项' : '团队路由'}
       </Badge>
     );
   return (
@@ -52,7 +44,7 @@ export function TeamSessionTag({
           navigate(workItemHref(item.id));
         }}
       >
-        {label}
+        #{item.seq} 工作项
       </button>
     </Badge>
   );

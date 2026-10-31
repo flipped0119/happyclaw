@@ -37,7 +37,7 @@ interface ImBindingRowProps {
   onAudienceModeChange: (jid: string, mode: 'everyone' | 'owner_only') => void;
   onDelete: (group: AvailableImGroup) => void;
   /** Feishu ordinary groups bound to a main session. */
-  onTeamMode?: (group: AvailableImGroup, workspaceJid: string) => void;
+  onTeamMode?: (group: AvailableImGroup) => void;
 }
 
 export function ImBindingRow({
@@ -91,8 +91,6 @@ export function ImBindingRow({
     }
     return '未绑定';
   };
-
-  const teamWorkspaceJid = policyMismatch ? null : teamModeWorkspaceOf(group);
 
   const showAudience =
     group.channel_type === 'feishu' &&
@@ -202,10 +200,10 @@ export function ImBindingRow({
               }
             />
           )}
-          {onTeamMode && teamWorkspaceJid && (
+          {onTeamMode && teamModeWorkspaceOf(group) && (
             <IconButton
               label="团队模式"
-              onClick={() => onTeamMode(group, teamWorkspaceJid)}
+              onClick={() => onTeamMode(group)}
               disabled={isActioning}
               className="text-muted-foreground"
               icon={<UsersRound className="size-3.5" />}

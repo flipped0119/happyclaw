@@ -55,7 +55,6 @@ async function render() {
     root!.render(
       <>
         <TeamModeDialog
-          open
           workspaceJid={WS}
           channelJid={GROUP}
           onClose={onClose}

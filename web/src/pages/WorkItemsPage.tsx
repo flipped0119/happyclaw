@@ -47,17 +47,18 @@ export function WorkItemsPage() {
     void reload();
   }, [reload]);
 
-  const items = useMemo(() => Object.values(itemMap), [itemMap]);
-  const decisions = useMemo(
-    () => Object.values(decisionMap).flat(),
-    [decisionMap],
+  const sections = useMemo(
+    () =>
+      buildWorkSections(
+        Object.values(itemMap),
+        Object.values(decisionMap).flat(),
+      ),
+    [itemMap, decisionMap],
   );
   const routed = itemId ? itemMap[itemId] : undefined;
   const selected =
     routed ??
-    (isDesktop && !itemId
-      ? (firstWorkItem(buildWorkSections(items, decisions)) ?? undefined)
-      : undefined);
+    (isDesktop && !itemId ? (firstWorkItem(sections) ?? undefined) : undefined);
   const select = (id: string) => navigate(workItemHref(id));
   const back = () => navigate('/work');
 
@@ -68,8 +69,7 @@ export function WorkItemsPage() {
   );
   const list = (
     <WorkItemList
-      items={items}
-      decisions={decisions}
+      sections={sections}
       selectedId={selected?.id ?? null}
       onSelect={select}
       loading={loading && !loaded}
@@ -134,7 +134,7 @@ export function WorkItemsPage() {
           loaded &&
           (itemId
             ? notFound
-            : items.length > 0 && (
+            : Object.keys(itemMap).length > 0 && (
                 <EmptyState
                   icon={ClipboardList}
                   title="选择一个工作项"

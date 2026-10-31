@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { ClipboardList, Lock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -6,6 +5,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { cn } from '@/lib/utils';
 import {
   WORK_DECISION_LABELS,
+  WORK_RECENT_LIMIT,
   formatWorkTime,
   workItemTitle,
   workStageLabel,
@@ -17,9 +17,6 @@ import {
   type WorkDecision,
   type WorkItemView,
 } from '../../work-items';
-
-/** Ended items and recorded decisions shown at most. */
-const RECENT_SHOWN = 20;
 
 export interface WorkSections {
   needsMe: WorkItemView[];
@@ -46,11 +43,11 @@ export function buildWorkSections(
       .sort((a, b) =>
         newestFirst(a.endedAt ?? a.updatedAt, b.endedAt ?? b.updatedAt),
       )
-      .slice(0, RECENT_SHOWN),
+      .slice(0, WORK_RECENT_LIMIT),
     decisions: decisions
       .slice()
       .sort((a, b) => newestFirst(a.createdAt, b.createdAt))
-      .slice(0, RECENT_SHOWN),
+      .slice(0, WORK_RECENT_LIMIT),
   };
 }
 
@@ -186,22 +183,16 @@ function Row({ children }: { children: React.ReactNode }) {
  * when it has something.
  */
 export function WorkItemList({
-  items,
-  decisions,
+  sections,
   selectedId,
   onSelect,
   loading,
 }: {
-  items: WorkItemView[];
-  decisions: WorkDecision[];
+  sections: WorkSections;
   selectedId: string | null;
   onSelect: (id: string) => void;
   loading: boolean;
 }) {
-  const sections = useMemo(
-    () => buildWorkSections(items, decisions),
-    [items, decisions],
-  );
   const renderItems = (list: WorkItemView[]) =>
     list.map((item) => (
       <Row key={item.id}>
@@ -212,8 +203,7 @@ export function WorkItemList({
         />
       </Row>
     ));
-  const empty =
-    items.length === 0 && sections.decisions.length === 0 && !loading;
+  const empty = !loading && Object.values(sections).every((l) => !l.length);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
