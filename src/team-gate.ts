@@ -195,11 +195,6 @@ export function recallTeamDecision(
     : undefined;
 }
 
-/** Test seam. */
-export function clearTeamDecisions(): void {
-  decisions.clear();
-}
-
 // ── Model-facing input headers ─────────────────────────────────────────
 
 export const TEAM_INPUT_ATTACHMENT_TYPE = 'team_input';
@@ -267,6 +262,10 @@ function isTeamInputItem(item: unknown): item is TeamInputItem {
 export function readTeamInput(
   attachmentsJson: string | null | undefined,
 ): TeamInputItem | null {
+  // Every prompt reads every message: parse only rows that can carry one.
+  if (!attachmentsJson?.includes(`"${TEAM_INPUT_ATTACHMENT_TYPE}"`)) {
+    return null;
+  }
   return parseAttachments(attachmentsJson).find(isTeamInputItem) ?? null;
 }
 

@@ -39,7 +39,6 @@ export interface ChannelInboundRoutingDeps {
    */
   resolveTeamRoute?: (
     chatJid: string,
-    mount: ChannelMount,
     messageMeta: ChannelMessageMeta | undefined,
   ) => { effectiveJid: string; agentId: string } | null;
 }
@@ -131,7 +130,7 @@ export function createChannelInboundRouter(deps: ChannelInboundRoutingDeps): (
           'resolveEffectiveChatJid: channel_mounts workspace differs from session owner, using session owner workspace',
         );
       }
-      const teamRoute = deps.resolveTeamRoute?.(chatJid, mount, messageMeta);
+      const teamRoute = deps.resolveTeamRoute?.(chatJid, messageMeta);
       if (teamRoute) return teamRoute;
       if (mountedTarget.agentId) {
         return {

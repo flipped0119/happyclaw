@@ -78,12 +78,14 @@ import {
   TEAM_IM_WORD_LIMIT,
   TEAM_RULE_LIMIT,
   TEAM_RULE_TEXT_LIMIT,
+  WORK_IPC_TYPES,
   type TeamRole,
   type TeamSettings,
   type WorkDecision,
   type WorkDecisionKind,
   type WorkItem,
   type WorkItemStatus,
+  type WorkIpcType,
   type WorkItemView,
   type WorkMandate,
   type WorkReportState,
@@ -305,6 +307,67 @@ function endItem(
   );
 }
 
+/** Reopen an ended item for the message that resumed it. */
+function resumeItem(item: WorkItem, triggerMessageId: string): WorkItem {
+  const resumed = patchItem(item, {
+    status: 'open',
+    outcome: null,
+    endedAt: null,
+  });
+  recordWorkEvent({
+    workItemId: item.id,
+    kind: 'resume',
+    triggerMessageId,
+    now: now(),
+  });
+  return resumed;
+}
+
+/** Note that a group message reached an item (work_ack, work_handback check it). */
+function noteDelivery(
+  item: WorkItem,
+  triggerMessageId: string,
+  text?: string,
+): void {
+  recordWorkEvent({
+    workItemId: item.id,
+    kind: 'input',
+    text,
+    triggerMessageId,
+    now: now(),
+  });
+}
+
+/** A group message for an item it was not routed to: a `<work_followup>` copy. */
+function deliverFollowupCopy(
+  item: WorkItem,
+  message: {
+    id: string;
+    content: string;
+    senderName?: string;
+    sourceJid?: string | null;
+    senderImId?: string;
+    threadId?: string;
+    addressed: boolean;
+  },
+): void {
+  injectTeamInput({
+    workspaceJid: item.workspaceJid,
+    agentId: item.agentId,
+    messageId: followupCopyId(message.id, item.id),
+    content: message.content,
+    senderName: message.senderName || undefined,
+    sourceJid: message.sourceJid ?? item.channelJid,
+    item: followupInputItem({
+      item,
+      triggerMessageId: message.id,
+      addressed: message.addressed,
+      senderImId: message.senderImId,
+      threadId: message.threadId,
+    }),
+  });
+}
+
 // ── REST ───────────────────────────────────────────────────────────────
 
 /** The workspace's group mounts and their team settings. */
@@ -462,13 +525,15 @@ function requireItem(id: string): WorkItem {
   return item;
 }
 
-function stopItem(item: WorkItem, by: string): WorkItem {
+function stopItem(item: WorkItem, by: string, interrupt = true): WorkItem {
   const stopped = endItem(item, 'stopped', { attention: null });
   recordWorkEvent({ workItemId: item.id, kind: 'stop', text: by, now: now() });
   // Stops the turn the worker runs now; queued inputs stay with the session.
-  getWorkItemRuntimeHooks().interruptLane(
-    laneJidOf(item.workspaceJid, item.agentId),
-  );
+  if (interrupt) {
+    getWorkItemRuntimeHooks().interruptLane(
+      laneJidOf(item.workspaceJid, item.agentId),
+    );
+  }
   return stopped;
 }
 
@@ -530,6 +595,7 @@ export function teamInputItemFor(
     senderImId?: string;
     mentionedBot: boolean;
   },
+  settings: TeamSettings,
 ): TeamInputItem | null {
   if (decision.kind === 'ignore') return null;
   if (decision.kind === 'subscribed') {
@@ -543,13 +609,12 @@ export function teamInputItemFor(
       copyItemIds: copies.map((item) => item.id),
     });
   }
-  const team = getTeamMount(decision.channelJid);
   return candidateInputItem({
     triggerMessageId: message.messageId,
     strength: decision.strength,
     listed: decision.listed,
     addressed: decision.addressed,
-    settings: team?.settings ?? parseTeamSettings(null),
+    settings,
     threadItems: decision.threadItems,
     senderImId: message.senderImId,
     threadId: message.threadId,
@@ -568,50 +633,29 @@ export function followupCopyId(messageId: string, workItemId: string): string {
  */
 export function onTeamMessageStored(
   decision: TeamInboundDecision,
-  message: Pick<
-    NewMessage,
-    'id' | 'content' | 'sender_name' | 'source_jid' | 'chat_jid'
-  > & { senderImId?: string; threadId?: string; mentionedBot?: boolean },
+  message: Pick<NewMessage, 'id' | 'content' | 'sender_name' | 'source_jid'> & {
+    senderImId?: string;
+    threadId?: string;
+    mentionedBot?: boolean;
+  },
 ): void {
   if (decision.kind !== 'subscribed') return;
-  const at = now();
   for (const [index, reached] of decision.items.entries()) {
     let item = getWorkItem(reached.id) ?? reached;
     if (decision.resumeIds.includes(item.id) && item.status === 'ended') {
       if (item.outcome === 'stopped') continue;
-      item = patchItem(item, {
-        status: 'open',
-        outcome: null,
-        endedAt: null,
-      });
-      recordWorkEvent({
-        workItemId: item.id,
-        kind: 'resume',
-        triggerMessageId: message.id,
-        now: at,
-      });
+      item = resumeItem(item, message.id);
     }
-    recordWorkEvent({
-      workItemId: item.id,
-      kind: 'input',
-      triggerMessageId: message.id,
-      now: at,
-    });
+    noteDelivery(item, message.id);
     if (index > 0) {
-      injectTeamInput({
-        workspaceJid: item.workspaceJid,
-        agentId: item.agentId,
-        messageId: followupCopyId(message.id, item.id),
+      deliverFollowupCopy(item, {
+        id: message.id,
         content: message.content,
         senderName: message.sender_name,
-        sourceJid: message.source_jid ?? item.channelJid,
-        item: followupInputItem({
-          item,
-          triggerMessageId: message.id,
-          addressed: message.mentionedBot === true,
-          senderImId: message.senderImId,
-          threadId: message.threadId,
-        }),
+        sourceJid: message.source_jid,
+        senderImId: message.senderImId,
+        threadId: message.threadId,
+        addressed: message.mentionedBot === true,
       });
     }
     broadcast(item);
@@ -630,7 +674,7 @@ export function followupCopyIdsOf(
 ): string[] {
   const item = readTeamInput(attachmentsJson);
   if (!item) return [];
-  const ids = item.facts?.copyItemIds ?? [];
+  const ids = [...(item.facts?.copyItemIds ?? [])];
   if (item.tag === 'team_candidate') {
     const decision = getWorkDecisionForTrigger(channelJid, messageId);
     if (decision?.kind === 'attach' && decision.workItemId) {
@@ -641,6 +685,11 @@ export function followupCopyIdsOf(
 }
 
 // ── IPC: router and worker tools ───────────────────────────────────────
+
+/** A request type the team tools use. */
+export function isWorkIpcType(type: unknown): type is WorkIpcType {
+  return (WORK_IPC_TYPES as readonly unknown[]).includes(type);
+}
 
 /** Host-derived identity of the session that called a team tool. */
 export interface WorkIpcCaller {
@@ -903,12 +952,7 @@ async function acceptCandidate(
   const { context } = router;
   const existing = getWorkItemBySource(context.channelJid, candidate.messageId);
   if (existing) {
-    return {
-      triggerMessageId: candidate.messageId,
-      ok: true,
-      workItemId: existing.id,
-      decision: 'accept',
-    };
+    return routed(candidate, 'accept', existing.id);
   }
   refuseDecided(router, candidate);
   const title = typeof route.title === 'string' ? route.title.trim() : '';
@@ -920,10 +964,7 @@ async function acceptCandidate(
     route.acknowledgement,
     'acknowledgement',
   );
-  const note = optionalText(route.note, 2000);
-  if (note && countImWords(note) > NOTE_WORD_LIMIT) {
-    fail(`note is limited to ${NOTE_WORD_LIMIT} words.`);
-  }
+  const note = optionalNote(route.note);
   const facts = candidate.item.facts ?? {};
   const strength = facts.strength ?? 'explicit';
   const settings = context.settings;
@@ -953,11 +994,7 @@ async function acceptCandidate(
         reason: note ?? title,
         ruleIds: matchedRules.map((rule) => rule.id),
       });
-      return {
-        triggerMessageId: candidate.messageId,
-        ok: true,
-        decision: 'would_accept',
-      };
+      return routed(candidate, 'would_accept');
     }
     if (settings.acceptMode !== 'auto') {
       fail('This group does not accept inferred work.');
@@ -1014,19 +1051,9 @@ async function acceptCandidate(
         session: orphan,
       }).catch(() => undefined);
     }
-    return {
-      triggerMessageId: candidate.messageId,
-      ok: true,
-      workItemId: item.id,
-      decision: 'accept',
-    };
+    return routed(candidate, 'accept', item.id);
   }
-  for (const key of teamTriggerKeys({
-    messageId: candidate.messageId,
-    threadId: facts.threadId,
-  })) {
-    subscribeWorkItem(item.id, context.channelJid, key, now());
-  }
+  subscribeTrigger(item, candidate.messageId, facts.threadId);
   decide(router, candidate, 'accept', {
     workItemId: item.id,
     reason: note ?? '',
@@ -1034,13 +1061,7 @@ async function acceptCandidate(
   });
   // The request itself, in full: the item's detail shows it as the original
   // message.
-  recordWorkEvent({
-    workItemId: item.id,
-    kind: 'input',
-    text: candidate.content,
-    triggerMessageId: candidate.messageId,
-    now: now(),
-  });
+  noteDelivery(item, candidate.messageId, candidate.content);
   // The router's acknowledgement is this trigger's one ack: a worker's
   // work_ack on the same trigger is a duplicate.
   if (
@@ -1096,12 +1117,40 @@ async function acceptCandidate(
     'Work item accepted',
   );
   broadcast(item);
+  return routed(candidate, 'accept', item.id);
+}
+
+function routed(
+  candidate: Candidate,
+  decision: WorkDecisionKind,
+  workItemId?: string,
+): WorkRouteResultItem {
   return {
     triggerMessageId: candidate.messageId,
     ok: true,
-    workItemId: item.id,
-    decision: 'accept',
+    ...(workItemId ? { workItemId } : {}),
+    decision,
   };
+}
+
+/** Subscribe an item to a trigger and its thread, so replies reach it. */
+function subscribeTrigger(
+  item: WorkItem,
+  messageId: string,
+  threadId: string | undefined,
+): void {
+  for (const key of teamTriggerKeys({ messageId, threadId })) {
+    subscribeWorkItem(item.id, item.channelJid, key, now());
+  }
+}
+
+/** A router note: routing background of at most NOTE_WORD_LIMIT words. */
+function optionalNote(value: unknown): string | null {
+  const note = optionalText(value, 2000);
+  if (note && countImWords(note) > NOTE_WORD_LIMIT) {
+    fail(`note is limited to ${NOTE_WORD_LIMIT} words.`);
+  }
+  return note;
 }
 
 function requireExplicit(candidate: Candidate, kind: string): void {
@@ -1121,58 +1170,26 @@ function attachCandidate(
     fail('That work item was stopped by a person.');
   }
   refuseDecided(router, candidate);
-  const note = optionalText(route.note, 2000);
-  if (note && countImWords(note) > NOTE_WORD_LIMIT) {
-    fail(`note is limited to ${NOTE_WORD_LIMIT} words.`);
-  }
+  const note = optionalNote(route.note);
   const facts = candidate.item.facts ?? {};
-  if (item.status === 'ended') {
-    item = patchItem(item, { status: 'open', outcome: null, endedAt: null });
-    recordWorkEvent({
-      workItemId: item.id,
-      kind: 'resume',
-      triggerMessageId: candidate.messageId,
-      now: now(),
-    });
-  }
-  for (const key of teamTriggerKeys({
-    messageId: candidate.messageId,
-    threadId: facts.threadId,
-  })) {
-    subscribeWorkItem(item.id, item.channelJid, key, now());
-  }
+  if (item.status === 'ended') item = resumeItem(item, candidate.messageId);
+  subscribeTrigger(item, candidate.messageId, facts.threadId);
   decide(router, candidate, 'attach', {
     workItemId: item.id,
     reason: note ?? '',
   });
-  recordWorkEvent({
-    workItemId: item.id,
-    kind: 'input',
-    triggerMessageId: candidate.messageId,
-    now: now(),
-  });
-  injectTeamInput({
-    workspaceJid: item.workspaceJid,
-    agentId: item.agentId,
-    messageId: followupCopyId(candidate.messageId, item.id),
+  noteDelivery(item, candidate.messageId);
+  deliverFollowupCopy(item, {
+    id: candidate.messageId,
     content: candidate.content,
-    senderName: candidate.senderName || undefined,
-    sourceJid: candidate.sourceJid ?? item.channelJid,
-    item: followupInputItem({
-      item,
-      triggerMessageId: candidate.messageId,
-      addressed: facts.addressed === true,
-      senderImId: facts.senderImId,
-      threadId: facts.threadId,
-    }),
+    senderName: candidate.senderName,
+    sourceJid: candidate.sourceJid,
+    senderImId: facts.senderImId,
+    threadId: facts.threadId,
+    addressed: facts.addressed === true,
   });
   broadcast(item);
-  return {
-    triggerMessageId: candidate.messageId,
-    ok: true,
-    workItemId: item.id,
-    decision: 'attach',
-  };
+  return routed(candidate, 'attach', item.id);
 }
 
 function stopFromCandidate(
@@ -1188,12 +1205,7 @@ function stopFromCandidate(
     reason: optionalText(route.reason, REASON_CHAR_LIMIT) ?? '',
   });
   if (item.status === 'open') broadcast(stopItem(item, candidate.messageId));
-  return {
-    triggerMessageId: candidate.messageId,
-    ok: true,
-    workItemId: item.id,
-    decision: 'stop',
-  };
+  return routed(candidate, 'stop', item.id);
 }
 
 async function routeOne(
@@ -1437,6 +1449,10 @@ function handleWorkReport(
   return {};
 }
 
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 /** The trigger was delivered to this item (its source or a follow-up). */
 function wasDeliveredTo(item: WorkItem, triggerMessageId: string): boolean {
   if (item.sourceMessageId === triggerMessageId) return true;
@@ -1451,10 +1467,7 @@ function handleWorkAck(
   payload: Record<string, unknown>,
 ): unknown {
   const item = requireWorker(caller);
-  const trigger =
-    typeof payload.triggerMessageId === 'string'
-      ? payload.triggerMessageId
-      : '';
+  const trigger = stringField(payload.triggerMessageId);
   if (!trigger || !wasDeliveredTo(item, trigger)) {
     fail('triggerMessageId is not a message delivered to this work item.');
   }
@@ -1484,10 +1497,7 @@ function handleWorkHandback(
   payload: Record<string, unknown>,
 ): unknown {
   const item = requireWorker(caller);
-  const trigger =
-    typeof payload.triggerMessageId === 'string'
-      ? payload.triggerMessageId
-      : '';
+  const trigger = stringField(payload.triggerMessageId);
   if (
     !trigger ||
     trigger === item.sourceMessageId ||
@@ -1609,14 +1619,7 @@ export async function handleWorkIpc(
 export function onTeamSessionDeleted(agentId: string): void {
   const item = getWorkItemByAgent(agentId);
   if (item && item.status === 'open') {
-    const ended = endItem(item, 'stopped', { attention: null });
-    recordWorkEvent({
-      workItemId: item.id,
-      kind: 'stop',
-      text: 'session_deleted',
-      now: now(),
-    });
-    broadcast(ended);
+    broadcast(stopItem(item, 'session_deleted', false));
   }
   const team = getTeamMountByRouter(agentId);
   if (team) {

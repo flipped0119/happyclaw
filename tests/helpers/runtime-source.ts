@@ -74,7 +74,8 @@ function automationDefaults(): Record<string, unknown> {
     settleCurrentAutomationRun: () => {},
     UNSETTLED_RUN_OUTCOME: { status: 'interrupted', error: 'unsettled' },
     // Team mode: no session has a team role and no message a team decision.
-    WORK_IPC_TYPES,
+    isWorkIpcType: (type: unknown) =>
+      (WORK_IPC_TYPES as readonly unknown[]).includes(type),
     resolveTeamRole: () => null,
     teamRoleKey: () => null,
     resolveTeamRoute: () => null,

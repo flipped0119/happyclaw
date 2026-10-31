@@ -53,7 +53,6 @@ let failReplies = false;
 
 function installHooks(): void {
   runtime.setWorkItemRuntimeHooks({
-    getGroup: (jid) => db.getRegisteredGroup(jid),
     admitInput: () => 'started',
     wake: vi.fn(),
     broadcastNewMessage: vi.fn(),
@@ -727,7 +726,6 @@ describe('subscribed group messages', () => {
 
     service.onTeamMessageStored(decision, {
       id: 'om_follow',
-      chat_jid: `${WORKSPACE}#agent:${a.agentId}`,
       content: '还有一个问题',
       sender_name: '小王',
       source_jid: CHAT,
@@ -790,7 +788,6 @@ describe('subscribed group messages', () => {
       },
       {
         id: 'om_h2',
-        chat_jid: `${WORKSPACE}#agent:${item.agentId}`,
         content: '另一个需求',
         sender_name: '小王',
         source_jid: CHAT,

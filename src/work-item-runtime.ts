@@ -30,11 +30,7 @@ import {
   withTeamInputAttachment,
   type TeamInputItem,
 } from './team-gate.js';
-import type {
-  ChannelTurnContext,
-  NewMessage,
-  RegisteredGroup,
-} from './types.js';
+import type { ChannelTurnContext, NewMessage } from './types.js';
 import type { WorkItemWsEvent } from './work-items.js';
 
 /** Where a team reply is posted: quoted under one message of the group. */
@@ -53,7 +49,6 @@ export type TeamReplyOutcome =
   | { ok: false; error: string };
 
 export interface WorkItemRuntimeHooks {
-  getGroup(jid: string): RegisteredGroup | undefined;
   /** Admit a stored input like an inbound follow-up in `queue` mode. */
   admitInput(input: {
     laneJid: string;
@@ -94,7 +89,7 @@ export function laneJidOf(workspaceJid: string, agentId: string): string {
   return `${workspaceJid}#agent:${agentId}`;
 }
 
-export const TEAM_INPUT_SENDER = 'happyclaw-team';
+const TEAM_INPUT_SENDER = 'happyclaw-team';
 const TEAM_INPUT_SENDER_NAME = 'HappyClaw';
 
 /**
@@ -155,7 +150,8 @@ export function injectTeamInput(input: {
     messageId: row.id,
     sourceJid,
   });
-  runtime.broadcastNewMessage(laneJid, row);
+  // The header is for the agent: the Web shows the content alone.
+  runtime.broadcastNewMessage(laneJid, { ...row, attachments: undefined });
   if (disposition === 'started')
     runtime.wake(input.workspaceJid, input.agentId);
 }

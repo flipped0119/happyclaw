@@ -539,7 +539,6 @@ import { ProactiveProgressCarry, TurnTraceTracker } from './turn-trace.js';
 import {
   AgentProfile,
   ChannelMessageMeta,
-  ChannelMount,
   ChannelTurnContext,
   MessageCursor,
   NewMessage,
@@ -631,6 +630,7 @@ import {
   hasWorkerSession,
   isTeamBotMessage,
   isTeamListed,
+  isWorkIpcType,
   onTeamMessageStored,
   resolveTeamGroup,
   resolveTeamRole,
@@ -639,12 +639,13 @@ import {
 } from './work-item-service.js';
 import {
   deliverTeamReplyThroughOutbox,
+  laneJidOf,
   setWorkItemRuntimeHooks,
   type TeamReplyOutcome,
   type TeamReplyRequest,
 } from './work-item-runtime.js';
 import { findSubscribedWorkItems } from './work-item-store.js';
-import { WORK_IPC_TYPES } from './work-items.js';
+import type { TeamRole } from './work-items.js';
 import { installSkillForUser, deleteSkillForUser } from './routes/skills.js';
 import { skillMutationTurnRejection } from './skill-ipc-authorization.js';
 import {
@@ -1739,6 +1740,7 @@ function injectPreparedFollowUp(
   const images = collectMessageImages(item.chat_jid, prepared.messages, {
     knownMessageIds: knownReferencedMessageIds,
   });
+  const queuedTeamRole = resolveTeamRole(runtime?.agentId);
   const interactionBatch = runtime
     ? selectRuntimeInteractionBatch(
         prepared.messages,
@@ -1749,10 +1751,9 @@ function injectPreparedFollowUp(
             ? 'spawn'
             : 'conversation'
           : 'main',
-        runtime.agentId ?? undefined,
+        queuedTeamRole,
       )
     : undefined;
-  const queuedTeamRole = resolveTeamRole(runtime?.agentId);
   // The same Feishu CLI identity a cold start would bind (the turn's Feishu
   // account, else the workspace's), so a batch never inherits the identity of
   // whichever Bot happened to start the warm container.
@@ -2884,11 +2885,11 @@ function selectRuntimeInteractionBatch(
   group: RegisteredGroup,
   logicalJid: string,
   agentKind: 'main' | 'conversation' | 'spawn' = 'main',
-  agentId?: string,
+  teamRole: TeamRole | null = null,
 ) {
   // Team-mode router and worker sessions always run proactive: their final
   // SDK text is never published, they speak through the team tools.
-  if (agentId && resolveTeamRole(agentId)) {
+  if (teamRole) {
     return selectSourceInteractionModePrefix(
       messages,
       () => 'proactive',
@@ -4319,6 +4320,28 @@ async function deliverTerminalFailureNotice(input: {
       'Terminal failure notice not delivered to channel; Web record kept, input stays settled',
     );
   }
+}
+
+/**
+ * Admit an input the host composed (an automation run's, a team input) like
+ * an inbound follow-up in `queue` mode: behind an active turn it becomes a
+ * visible queued item.
+ */
+function admitComposedLaneInput(input: {
+  laneJid: string;
+  messageId: string;
+  sourceJid: string;
+}): 'started' | 'queued' {
+  const { disposition } = handleIncomingFollowUp({
+    targetJid: input.laneJid,
+    sourceJid: input.sourceJid,
+    messageId: input.messageId,
+    senderImId: '',
+    requestedMode: 'queue',
+  });
+  if (disposition === 'started') return 'started';
+  broadcastFollowUpUpdate(input.laneJid);
+  return 'queued';
 }
 
 /** Post one team reply (team mode) through the durable Outbox. */
@@ -12434,6 +12457,8 @@ function startIpcWatcher(): void {
     }
 
     for (const { path: ipcRoot, agentId: ipcAgentId } of ipcRoots) {
+      // Team-mode sessions never message a chat themselves.
+      const ipcTeamSession = !!resolveTeamRole(ipcAgentId);
       const messagesDir = path.join(ipcRoot, 'messages');
       const messageResultsDir = path.join(ipcRoot, 'message-results');
       const tasksDir = path.join(ipcRoot, 'tasks');
@@ -12571,7 +12596,7 @@ function startIpcWatcher(): void {
                   deliveryRole: data.deliveryRole,
                   authorized,
                   interactionMode: ipcInteractionMode,
-                  teamSession: !!resolveTeamRole(ipcAgentId),
+                  teamSession: ipcTeamSession,
                   // The channel the input came from, recorded when its turn
                   // was bound, and whether its own reply route is still open.
                   turnSource:
@@ -13060,7 +13085,7 @@ function startIpcWatcher(): void {
                         'Message could not be delivered to its target.',
                     },
               );
-            } else if (data.type === 'image' && resolveTeamRole(ipcAgentId)) {
+            } else if (data.type === 'image' && ipcTeamSession) {
               // Team-mode sessions never post to a chat themselves.
               messageResultWritten = writeIpcMessageResult(
                 messageResultsDir,
@@ -13390,9 +13415,7 @@ function startIpcWatcher(): void {
               parsedData?.requestId &&
               (isAutomationIpcType(parsedData.type) ||
                 isLegacyTaskIpcType(parsedData.type) ||
-                (WORK_IPC_TYPES as readonly string[]).includes(
-                  parsedData.type ?? '',
-                ))
+                isWorkIpcType(parsedData.type))
             ) {
               const error = 'Internal error while processing task request.';
               writeTaskResult(
@@ -13400,9 +13423,7 @@ function startIpcWatcher(): void {
                 parsedData.type ?? '',
                 parsedData.requestId,
                 // Team tools answer in the `{ ok, error }` shape.
-                (WORK_IPC_TYPES as readonly string[]).includes(
-                  parsedData.type ?? '',
-                )
+                isWorkIpcType(parsedData.type)
                   ? { ok: false, error }
                   : { success: false, error },
               );
@@ -14061,7 +14082,7 @@ async function processTaskIpc(
     return { user, workspaceJid, activeTurn, context };
   };
 
-  if ((WORK_IPC_TYPES as readonly string[]).includes(data.type)) {
+  if (isWorkIpcType(data.type)) {
     // The caller is the IPC namespace the request was read from, never the
     // body; the service refuses a router tool from a non-router lane and a
     // worker tool from a non-worker lane.
@@ -15566,17 +15587,17 @@ async function processAgentConversation(
     }
     return;
   }
+  // Fixed for this runner: a changed role (or an approved worker) never
+  // reuses it (see RunnerMessageRequirements.teamRoleKey).
+  const teamRole = resolveTeamRole(agentId);
   const interactionBatch = selectRuntimeInteractionBatch(
     missedMessages,
     effectiveGroup,
     chatJid,
     agent.kind,
-    agentId,
+    teamRole,
   );
   const interactionMode = interactionBatch.interactionMode;
-  // Fixed for this runner: a changed role (or an approved worker) never
-  // reuses it (see RunnerMessageRequirements.teamRoleKey).
-  const teamRole = resolveTeamRole(agentId);
   const replyBatch = selectChannelReplyBatch(interactionBatch.messages);
   if (
     pendingWindow.truncated ||
@@ -20710,14 +20731,13 @@ function resolveTeamPlan(
     { chatJid, messageId: meta.messageId, team: decision.kind },
     'Team mode routed a group message',
   );
-  const inputItem = teamInputItemFor(decision, message);
+  const inputItem = teamInputItemFor(decision, message, context.settings);
   return { outcome: decision.kind, ...(inputItem ? { inputItem } : {}) };
 }
 
 /** The lane a team-mode group message was routed to by its decision. */
 function resolveTeamRoute(
   chatJid: string,
-  _mount: ChannelMount,
   meta: ChannelMessageMeta | undefined,
 ): { effectiveJid: string; agentId: string } | null {
   const decision = recallTeamDecision(chatJid, meta?.messageId);
@@ -20726,10 +20746,7 @@ function resolveTeamRoute(
     decision.kind === 'subscribed'
       ? decision.items[0].agentId
       : decision.routerAgentId;
-  return {
-    effectiveJid: `${decision.workspaceJid}#agent:${agentId}`,
-    agentId,
-  };
+  return { effectiveJid: laneJidOf(decision.workspaceJid, agentId), agentId };
 }
 
 /**
@@ -20753,7 +20770,6 @@ function afterTeamMessageStored(
   try {
     onTeamMessageStored(decision, {
       id: messageId,
-      chat_jid: targetJid,
       content: row.content,
       sender_name: row.sender_name ?? '',
       source_jid: row.source_jid ?? sourceJid,
@@ -20988,14 +21004,14 @@ function buildOnAgentMessage(): (baseChatJid: string, agentId: string) => void {
       getMessagesSince(virtualChatJid, sinceCursor),
     );
     const { effectiveGroup } = resolveEffectiveGroup(group);
+    const warmTeamRole = resolveTeamRole(agentId);
     const interactionBatch = selectRuntimeInteractionBatch(
       allPendingMessages,
       effectiveGroup,
       homeChatJid,
       agent?.kind === 'spawn' ? 'spawn' : 'conversation',
-      agentId,
+      warmTeamRole,
     );
-    const warmTeamRole = resolveTeamRole(agentId);
     const missedMessages = selectChannelReplyBatch(interactionBatch.messages);
     const requiredInteractionMode = interactionBatch.interactionMode;
     const warmChannelContext = resolveBatchChannelContext(
@@ -23740,18 +23756,7 @@ async function main(): Promise<void> {
   const automationCore = createAutomationCore(
     createAutomationRuntimeDeps({
       getGroup: (jid) => registeredGroups[jid] ?? getRegisteredGroup(jid),
-      admitInput: ({ laneJid, messageId, sourceJid }) => {
-        const { disposition } = handleIncomingFollowUp({
-          targetJid: laneJid,
-          sourceJid,
-          messageId,
-          senderImId: '',
-          requestedMode: 'queue',
-        });
-        if (disposition === 'started') return 'started';
-        broadcastFollowUpUpdate(laneJid);
-        return 'queued';
-      },
+      admitInput: admitComposedLaneInput,
       wake: (session) =>
         session.agentId
           ? buildOnAgentMessage()(session.workspaceJid, session.agentId)
@@ -23782,19 +23787,7 @@ async function main(): Promise<void> {
   // Team mode: composed inputs enter lanes like automation inputs; replies
   // go out through the durable Outbox, quoted in the group's main chat.
   setWorkItemRuntimeHooks({
-    getGroup: (jid) => registeredGroups[jid] ?? getRegisteredGroup(jid),
-    admitInput: ({ laneJid, messageId, sourceJid }) => {
-      const { disposition } = handleIncomingFollowUp({
-        targetJid: laneJid,
-        sourceJid,
-        messageId,
-        senderImId: '',
-        requestedMode: 'queue',
-      });
-      if (disposition === 'started') return 'started';
-      broadcastFollowUpUpdate(laneJid);
-      return 'queued';
-    },
+    admitInput: admitComposedLaneInput,
     wake: (workspaceJid, agentId) =>
       buildOnAgentMessage()(workspaceJid, agentId),
     broadcastNewMessage: (laneJid, message) =>

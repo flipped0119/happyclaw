@@ -5,14 +5,14 @@ import {
   type TurnMessageDeliveryRole,
 } from './turn-output-coordinator.js';
 
-/**
- * What the Agent is told when an IM turn's progress is rejected for want of a
- * route: nothing was sent, and sending it again cannot help.
- */
 /** What a team-mode session is told when it tries to message a chat itself. */
 export const TEAM_SESSION_IM_REFUSAL =
   'Team-mode sessions do not message chats directly. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';
 
+/**
+ * What the Agent is told when an IM turn's progress is rejected for want of a
+ * route: nothing was sent, and sending it again cannot help.
+ */
 export const NATIVE_ROUTE_UNAVAILABLE_ERROR =
   "Progress was not delivered: this turn's native channel route is unavailable. Do not retry it. End the turn, or send your final answer once with send_message(delivery_role=final); the final uses the same route, so if it fails as well, do not retry it either.";
 

@@ -223,11 +223,7 @@ describe('team mode routes', () => {
       effectiveJid: 'web:workspace#agent:router-1',
       agentId: 'router-1',
     });
-    expect(resolveTeamRoute).toHaveBeenCalledWith(
-      'feishu:oc_team',
-      mount,
-      message,
-    );
+    expect(resolveTeamRoute).toHaveBeenCalledWith('feishu:oc_team', message);
   });
 
   test('without a team decision the route is unchanged', () => {
