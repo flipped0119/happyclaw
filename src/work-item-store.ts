@@ -598,6 +598,17 @@ export function hasWorkEvent(
   ).get(workItemId, kind, triggerMessageId);
 }
 
+/** The item's last report that is not an undelivered marker, if any. */
+export function getLastWorkReport(
+  workItemId: string,
+): { id: number; state: string | null } | undefined {
+  return stmt(
+    `SELECT id, state FROM work_item_events
+      WHERE work_item_id = ? AND kind = 'report' AND COALESCE(state, '') <> 'undelivered'
+      ORDER BY id DESC LIMIT 1`,
+  ).get(workItemId) as { id: number; state: string | null } | undefined;
+}
+
 export function listWorkEvents(workItemId: string, limit = 200): WorkEvent[] {
   return (
     stmt(
@@ -735,13 +746,18 @@ export function isWorkItemReplyMessage(
   ).get(channelJid, providerMessageId);
 }
 
-/** Replies not delivered yet, oldest first. */
-export function listPendingWorkItemReplies(): WorkItemReply[] {
-  return (
-    stmt(
-      "SELECT * FROM work_item_replies WHERE status = 'pending' ORDER BY created_at",
-    ).all() as WorkItemReplyRow[]
-  ).map(mapReply);
+/** Replies not delivered yet, oldest first; of one group when given. */
+export function listPendingWorkItemReplies(
+  channelJid?: string,
+): WorkItemReply[] {
+  const rows = channelJid
+    ? stmt(
+        "SELECT * FROM work_item_replies WHERE status = 'pending' AND channel_jid = ? ORDER BY created_at",
+      ).all(channelJid)
+    : stmt(
+        "SELECT * FROM work_item_replies WHERE status = 'pending' ORDER BY created_at",
+      ).all();
+  return (rows as WorkItemReplyRow[]).map(mapReply);
 }
 
 export function updateWorkItemReply(

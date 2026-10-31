@@ -214,7 +214,7 @@ describe('subscribed messages', () => {
     );
     // The most specific key that reaches an item is the only one looked at.
     expect(seen).toEqual([['msg:om_src']]);
-    expect(decision).toMatchObject({ kind: 'subscribed', resumeIds: [] });
+    expect(decision).toMatchObject({ kind: 'subscribed' });
     expect(
       decision.kind === 'subscribed' && decision.items.map((i) => i.id),
     ).toEqual(['w1', 'w2']);
@@ -225,7 +225,10 @@ describe('subscribed messages', () => {
     const found = deps({ findSubscribedItems: () => [ended] });
     expect(
       decideTeamInbound(group(), message({ parentId: 'om_src' }), found),
-    ).toMatchObject({ kind: 'subscribed', resumeIds: ['w1'] });
+    ).toMatchObject({
+      kind: 'subscribed',
+      items: [expect.objectContaining({ id: 'w1', status: 'ended' })],
+    });
     expect(
       decideTeamInbound(
         group(),

@@ -17,6 +17,7 @@ import {
   getChannelTurnRun,
   type ChannelRouteSnapshot,
 } from './channel-reliability-store.js';
+import { KeyedLockPool } from './capability-lock.js';
 import { ChannelTurnRuntime } from './channel-turn-runtime.js';
 import { ensureChatExists, getMessage, storeMessageDirect } from './db.js';
 import { deliverFeishuCapabilityMutation } from './feishu-capability-outbox.js';
@@ -177,46 +178,30 @@ export function injectTeamInput(input: {
 
 // ── Replies in the group, one chat at a time ───────────────────────────
 
-const replyChains = new Map<string, Promise<unknown>>();
+const replyLocks = new KeyedLockPool();
 
 /**
  * Post a reply after every reply already asked for in the same group, so
  * the group reads them in the order the sessions sent them. Never rejects.
  */
-export function queueTeamReply(
+export async function queueTeamReply(
   request: TeamReplyRequest,
 ): Promise<TeamReplyOutcome> {
-  const previous = replyChains.get(request.channelJid) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(() => getWorkItemRuntimeHooks().postReply(request))
-    .catch((error: unknown): TeamReplyOutcome => {
-      logger.warn(
-        {
-          err: error,
-          channelJid: request.channelJid,
-          key: request.deliveryKey,
-        },
-        'Team reply delivery threw',
-      );
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        retryable: true,
-      };
-    });
-  replyChains.set(request.channelJid, next);
-  void next.finally(() => {
-    if (replyChains.get(request.channelJid) === next) {
-      replyChains.delete(request.channelJid);
-    }
-  });
-  return next;
-}
-
-/** Test seam: wait for every queued reply. */
-export async function flushTeamReplies(): Promise<void> {
-  await Promise.all([...replyChains.values()]);
+  try {
+    return await replyLocks.withLocks([request.channelJid], () =>
+      getWorkItemRuntimeHooks().postReply(request),
+    );
+  } catch (error) {
+    logger.warn(
+      { err: error, channelJid: request.channelJid, key: request.deliveryKey },
+      'Team reply delivery threw',
+    );
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    };
+  }
 }
 
 /**

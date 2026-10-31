@@ -97,8 +97,6 @@ export type TeamInboundDecision =
       workspaceJid: string;
       /** Items the message reaches, the first gets the real message. */
       items: WorkItem[];
-      /** Ended items among `items` that this message resumes. */
-      resumeIds: string[];
       /** The sender is listed: a follow-up from anyone else authorizes nothing. */
       listed: boolean;
     }
@@ -165,9 +163,6 @@ export function decideTeamInbound(
         channelJid: group.channelJid,
         workspaceJid: group.workspaceJid,
         items: reached,
-        resumeIds: reached
-          .filter((item) => item.status === 'ended')
-          .map((item) => item.id),
         listed,
       };
     }

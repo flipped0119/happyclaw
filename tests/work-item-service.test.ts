@@ -773,7 +773,6 @@ describe('subscribed group messages', () => {
     expect(decision.kind).toBe('subscribed');
     if (decision.kind !== 'subscribed') return;
     expect(decision.items.map((item) => item.id)).toEqual([a.id, b.id]);
-    expect(decision.resumeIds).toEqual([b.id]);
     expect(store.getWorkItem(b.id)).toMatchObject({ status: 'open' });
     const copy = laneRows(`${WORKSPACE}#agent:${b.agentId}`).find(
       (row) => row.id === service.followupCopyId('om_follow', b.id),

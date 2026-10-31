@@ -31,7 +31,7 @@ import {
 } from './session-factory.js';
 import {
   createSessionWorktree,
-  getWorktreeSupport,
+  WorktreeUnavailableError,
 } from './session-worktree.js';
 import {
   candidateInputItem,
@@ -65,6 +65,7 @@ import {
   insertWorkItemReply,
   isWorkItemReplyMessage,
   listPendingWorkItemReplies,
+  getLastWorkReport,
   listWorkDecisions,
   listWorkEvents,
   listWorkItems,
@@ -100,6 +101,10 @@ import {
   TEAM_LANE_POLICY,
   teamLaneWithholdsTool,
   WORK_IPC_TYPES,
+  WORK_NOTE_WORD_LIMIT,
+  WORK_REPORT_STATES,
+  WORK_TITLE_CHAR_LIMIT,
+  isWorkItemWritable,
   type TeamRole,
   type TeamSettings,
   type WorkDecision,
@@ -132,8 +137,6 @@ export class WorkItemError extends Error {
 
 export type { TeamMountView, WorkItemDetail } from './work-items.js';
 
-const TITLE_LIMIT = 60;
-const NOTE_WORD_LIMIT = 30;
 const SUMMARY_CHAR_LIMIT = 4000;
 const REASON_CHAR_LIMIT = 500;
 
@@ -267,7 +270,7 @@ export function resolveTeamRole(
     return {
       role: 'worker',
       workItemId: item.id,
-      writable: item.mandate.writable || !!item.approvedAt,
+      writable: isWorkItemWritable(item),
     };
   }
   return null;
@@ -549,8 +552,8 @@ export function stopGroupWorkItems(channelJid: string, reason: string): void {
     broadcast(stopItem(item, reason));
   }
   // Nothing the group was still owed goes out any more.
-  for (const reply of listPendingWorkItemReplies()) {
-    if (reply.channelJid === channelJid) voidReply(reply, reason);
+  for (const reply of listPendingWorkItemReplies(channelJid)) {
+    voidReply(reply, reason);
   }
 }
 
@@ -690,10 +693,7 @@ function stopItem(item: WorkItem, by: string, stopLane = true): WorkItem {
 }
 
 /** End an item as stopped by a person; interrupts its worker. */
-export async function stopWorkItem(
-  id: string,
-  _actor: WorkItemActor,
-): Promise<WorkItemView> {
+export function stopWorkItem(id: string, _actor?: WorkItemActor): WorkItemView {
   const item = requireItem(id);
   if (item.status === 'ended') {
     if (item.outcome === 'stopped') return toView(item);
@@ -703,13 +703,13 @@ export async function stopWorkItem(
 }
 
 /** Allow edits on an item that started read-only, and tell its worker. */
-export async function approveWorkItem(
+export function approveWorkItem(
   id: string,
-  _actor: WorkItemActor,
-): Promise<WorkItemView> {
+  _actor?: WorkItemActor,
+): WorkItemView {
   const item = requireItem(id);
   if (item.status === 'ended') throw new WorkItemError('工作项已经结束', 409);
-  if (item.mandate.writable || item.approvedAt) {
+  if (isWorkItemWritable(item)) {
     throw new WorkItemError('工作项已经可以修改', 409);
   }
   const approved = patchItem(item, { approvedAt: now() });
@@ -1286,13 +1286,16 @@ async function createWorkerSession(
   const workspace = context.workspace;
   let worktree = null;
   if (workspace.executionMode === 'host') {
-    const support = await getWorktreeSupport(workspace);
-    if (support.available) {
+    // A worktree when the directory is a git repository; a plain session
+    // when it cannot have one (not a repository, no commits).
+    try {
       worktree = await createSessionWorktree({
         group: workspace,
         chatJid: context.workspaceJid,
         agentId: sessionId,
       });
+    } catch (error) {
+      if (!(error instanceof WorktreeUnavailableError)) throw error;
     }
   }
   const session = await createConversationSession({
@@ -1320,8 +1323,8 @@ async function acceptCandidate(
   refuseDecided(router, candidate);
   const title = typeof route.title === 'string' ? route.title.trim() : '';
   if (!title) fail('accept needs a title.');
-  if ([...title].length > TITLE_LIMIT) {
-    fail(`title is limited to ${TITLE_LIMIT} characters.`);
+  if ([...title].length > WORK_TITLE_CHAR_LIMIT) {
+    fail(`title is limited to ${WORK_TITLE_CHAR_LIMIT} characters.`);
   }
   const acknowledgement = requireImText(
     route.acknowledgement,
@@ -1489,11 +1492,11 @@ function subscribeTrigger(
   }
 }
 
-/** A router note: routing background of at most NOTE_WORD_LIMIT words. */
+/** A router note: routing background of at most WORK_NOTE_WORD_LIMIT words. */
 function optionalNote(value: unknown): string | null {
   const note = optionalText(value, 2000);
-  if (note && countImWords(note) > NOTE_WORD_LIMIT) {
-    fail(`note is limited to ${NOTE_WORD_LIMIT} words.`);
+  if (note && countImWords(note) > WORK_NOTE_WORD_LIMIT) {
+    fail(`note is limited to ${WORK_NOTE_WORD_LIMIT} words.`);
   }
   return note;
 }
@@ -1671,9 +1674,7 @@ function acknowledge(
 
 /** The last report a result answers (ready, blocked or failed), if any. */
 function lastResultReportId(item: WorkItem): number | null {
-  const last = listWorkEvents(item.id, 200)
-    .filter((event) => event.kind === 'report' && event.state !== 'undelivered')
-    .at(-1);
+  const last = getLastWorkReport(item.id);
   return last &&
     (last.state === 'ready' ||
       last.state === 'blocked' ||
@@ -1790,14 +1791,7 @@ function handleWorkList(
   return { items };
 }
 
-const REPORT_STATES = new Set<WorkReportState>([
-  'progress',
-  'waiting',
-  'ready',
-  'blocked',
-  'failed',
-  'dropped',
-]);
+const REPORT_STATES: ReadonlySet<string> = new Set(WORK_REPORT_STATES);
 
 function handleWorkReport(
   caller: WorkIpcCaller,
@@ -1823,7 +1817,7 @@ function handleWorkReport(
       : {}),
   };
   let updated: WorkItem;
-  if (state === 'ready' && (item.mandate.writable || item.approvedAt)) {
+  if (state === 'ready' && isWorkItemWritable(item)) {
     updated = endItem(item, 'completed', patch);
   } else if (state === 'dropped') {
     updated = endItem(item, 'dropped', { ...patch, attention: null });
