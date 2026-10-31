@@ -2322,9 +2322,11 @@ Use the skills panel in the UI to find the skill ID (directory name, e.g. "memor
 }
 
 /**
- * Tools that post to the chat directly. A team-mode session speaks only
- * through its work tools, so none of these is registered (the host refuses
- * them from these lanes too).
+ * Tools a team-mode session does not get (the host refuses them from these
+ * lanes too). Those that post to the chat directly: the session speaks only
+ * through its work tools. Automations (and the retired schedule_task that
+ * points at them): one made in a team lane would freeze the group as its
+ * route and post its failures there. Skill installs, which reset the session.
  */
 const TEAM_WITHHELD_TOOL_NAMES = new Set([
   'send_message',
@@ -2332,7 +2334,14 @@ const TEAM_WITHHELD_TOOL_NAMES = new Set([
   'send_file',
   'feishu_send_card',
   'feishu_api_request',
+  'schedule_task',
+  'install_skill',
+  'uninstall_skill',
 ]);
+
+function withheldFromTeam(name: string): boolean {
+  return TEAM_WITHHELD_TOOL_NAMES.has(name) || name.startsWith('automation_');
+}
 
 /**
  * A team-mode session speaks only through its work tools: the router posts
@@ -2345,9 +2354,7 @@ function withTeamTools(
 ): SdkMcpToolDefinition<any>[] {
   const tasksDir = path.join(ctx.workspaceIpc, 'tasks');
   return [
-    ...tools.filter(
-      (definition) => !TEAM_WITHHELD_TOOL_NAMES.has(definition.name),
-    ),
+    ...tools.filter((definition) => !withheldFromTeam(definition.name)),
     ...createWorkTools(
       teamRole,
       (request, resultPrefix, timeoutMs) =>

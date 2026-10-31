@@ -35,13 +35,30 @@ const READER: TeamRole = {
   writable: false,
 };
 
-/** Tools that post to the chat directly; a team session has none of them. */
-const POSTING_TOOLS = [
+/**
+ * What a team session does not get: tools that post to the chat directly,
+ * automations (and the retired schedule_task) and skill installs.
+ */
+const WITHHELD_TOOLS = [
   'send_message',
   'send_image',
   'send_file',
   'feishu_send_card',
   'feishu_api_request',
+  'schedule_task',
+  'automation_create',
+  'automation_update',
+  'automation_pause',
+  'automation_resume',
+  'automation_complete',
+  'automation_delete',
+  'automation_run_now',
+  'automation_list',
+  'automation_list_runs',
+  'automation_notify_current_run',
+  'automation_silence_current_run',
+  'install_skill',
+  'uninstall_skill',
 ];
 
 const roots: string[] = [];
@@ -70,10 +87,12 @@ function context(root: string, teamRole?: TeamRole): McpContext {
   };
 }
 
+/** A Home session's tools, so the skill install tools are among them. */
 const names = (teamRole?: TeamRole) =>
-  createMcpTools(context('/tmp/work-tools-ipc', teamRole)).map(
-    (tool) => tool.name,
-  );
+  createMcpTools({
+    ...context('/tmp/work-tools-ipc', teamRole),
+    isHome: true,
+  }).map((tool) => tool.name);
 
 /** The Runner's real tool set behind a real MCP client, as the CLI sees it. */
 async function setup(teamRole: TeamRole) {
@@ -166,22 +185,22 @@ describe('team-mode tool registration', () => {
     }
   });
 
-  test('the router swaps the posting tools for the router tools', () => {
+  test('the router swaps the withheld tools for the router tools', () => {
     const plain = names();
-    expect(plain).toEqual(expect.arrayContaining(POSTING_TOOLS));
+    expect(plain).toEqual(expect.arrayContaining(WITHHELD_TOOLS));
     expect(names(ROUTER)).toEqual([
-      ...plain.filter((name) => !POSTING_TOOLS.includes(name)),
+      ...plain.filter((name) => !WITHHELD_TOOLS.includes(name)),
       'work_route',
       'work_reply',
       'work_list',
     ]);
   });
 
-  test('a worker, writable or not, swaps the posting tools for the worker tools', () => {
+  test('a worker, writable or not, swaps the withheld tools for the worker tools', () => {
     const plain = names();
     for (const role of [WRITER, READER]) {
       expect(names(role)).toEqual([
-        ...plain.filter((name) => !POSTING_TOOLS.includes(name)),
+        ...plain.filter((name) => !WITHHELD_TOOLS.includes(name)),
         'work_ack',
         'work_report',
         'work_handback',
