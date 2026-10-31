@@ -463,26 +463,28 @@ html.theme-ios {
 }
 
 html.dark.theme-ios {
-  --background: #000000;
+  /* iOS's elevated dark grays (sheets, popovers) rather than pure black:
+     black reads as a hole on a phone's page. */
+  --background: #1c1c1e;
   --qr-quiet-zone: #ffffff;
   --foreground: #ffffff;
   --primary-text: #409cff;
-  --card: #1c1c1e;
+  --card: #2c2c2e;
   --card-foreground: #ffffff;
-  --popover: #1c1c1e;
+  --popover: #2c2c2e;
   --popover-foreground: #ffffff;
   --primary: #0a84ff;
   --primary-foreground: #ffffff;
-  --secondary: #2c2c2e;
+  --secondary: #3a3a3c;
   --secondary-foreground: #ffffff;
-  --muted: #2c2c2e;
+  --muted: #3a3a3c;
   --muted-foreground: #a1a1a8;
-  --accent: #2c2c2e;
+  --accent: #3a3a3c;
   --accent-foreground: #ffffff;
   --destructive: #ff453a;
   --destructive-foreground: #ffffff;
-  --border: #38383a;
-  --input: #3a3a3c;
+  --border: #48484a;
+  --input: #48484a;
   --ring: #0a84ff;
   --brand-50: #001a33;
   --brand-100: #002d5c;
@@ -492,13 +494,13 @@ html.dark.theme-ios {
   --brand-500: #409cff;
   --brand-600: #70b5ff;
   --brand-700: #a3cfff;
-  --surface: #1c1c1e;
+  --surface: #2c2c2e;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: #0a84ff;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #2c2c2e;
+  --sidebar-accent: #3a3a3c;
   --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: #38383a;
+  --sidebar-border: #48484a;
   --sidebar-ring: #0a84ff;
   --code-block-bg: rgba(255, 255, 255, 0.06);
   --inline-code-bg: rgba(10, 132, 255, 0.16);
