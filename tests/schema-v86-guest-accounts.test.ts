@@ -86,7 +86,9 @@ describe('schema v86 guest accounts', () => {
 
     const backupName = fs
       .readdirSync(backupDir)
-      .find((name) => name.startsWith(`messages-v85-to-v${db.CURRENT_SCHEMA_VERSION}-`));
+      .find((name) =>
+        name.startsWith(`messages-v85-to-v${db.CURRENT_SCHEMA_VERSION}-`),
+      );
     expect(backupName).toBeDefined();
     const backup = new Database(path.join(backupDir, backupName!), {
       readonly: true,
