@@ -6,7 +6,11 @@ import { ALL_PERMISSIONS } from './permissions.js';
 import type { Permission } from './types.js';
 import { MAX_GROUP_NAME_LEN } from './group-constants.js';
 import { AUTOMATION_LIMITS } from './automation.js';
-import { TEAM_RULE_LIMIT, TEAM_RULE_TEXT_LIMIT } from './work-items.js';
+import {
+  TEAM_RULE_LIMIT,
+  TEAM_RULE_NAME_LIMIT,
+  TEAM_RULE_TEXT_LIMIT,
+} from './work-items.js';
 import {
   getModelPreset,
   isValidModelId,
@@ -133,7 +137,6 @@ export const AutomationMarkReadSchema = z.object({
 
 // Team mode (团队模式): a group mount's settings as the owner saves them.
 // `version` is the server's to bump, so the body never carries it.
-export const TEAM_RULE_NAME_LIMIT = 60;
 
 const TeamUnaddressedSchema = z.enum(['inferred', 'ignore']);
 

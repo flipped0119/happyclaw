@@ -68,6 +68,7 @@ export const DEFAULT_TEAM_SETTINGS: TeamSettings = {
 };
 
 export const TEAM_RULE_LIMIT = 20;
+export const TEAM_RULE_NAME_LIMIT = 60;
 export const TEAM_RULE_TEXT_LIMIT = 2000;
 
 const OUTCOMES = new Set<AdmissionOutcome>(['explicit', 'inferred', 'ignore']);
@@ -376,6 +377,45 @@ export interface WorkItemView extends WorkItem {
   stage: WorkStage;
   workspaceName: string;
   channelName: string | null;
+}
+
+export type WorkEventKind =
+  | 'report'
+  | 'ack'
+  | 'reply'
+  | 'handback'
+  | 'input'
+  | 'stop'
+  | 'approve'
+  | 'resume';
+
+/** One entry of a work item's timeline. */
+export interface WorkEvent {
+  id: number;
+  workItemId: string;
+  kind: WorkEventKind;
+  state: string | null;
+  text: string;
+  triggerMessageId: string | null;
+  createdAt: string;
+}
+
+/** GET /api/workspaces/:jid/team-mounts. */
+export interface TeamMountView {
+  channelJid: string;
+  channelName: string | null;
+  /** False when the mount cannot run team mode, with the reason. */
+  eligible: boolean;
+  ineligibleReason: string | null;
+  settings: TeamSettings;
+  routerAgentId: string | null;
+}
+
+/** GET /api/work-items/:id. */
+export interface WorkItemDetail {
+  item: WorkItemView;
+  events: WorkEvent[];
+  subscriptions: { channelJid: string; subKey: string }[];
 }
 
 /** WebSocket: a work item changed; the Web refetches or merges it. */

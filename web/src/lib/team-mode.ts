@@ -10,55 +10,22 @@ import type {
   WorkReportState,
   WorkStage,
 } from '../work-items';
+export type {
+  TeamMountView,
+  WorkEvent,
+  WorkEventKind,
+  WorkItemDetail,
+} from '../work-items';
+export { TEAM_RULE_NAME_LIMIT } from '../work-items';
 import { formatAutomationTime } from './automation';
 
 // Team mode (团队模式) on the Web: the REST shapes the shared file does not
 // carry and the words people read for stages, mandates and decisions.
 
-/** GET /api/workspaces/:jid/team-mounts (src/work-item-service.ts). */
-export interface TeamMountView {
-  channelJid: string;
-  channelName: string | null;
-  eligible: boolean;
-  ineligibleReason: string | null;
-  settings: TeamSettings;
-  routerAgentId: string | null;
-}
-
 export type TeamSettingsDraft = Omit<TeamSettings, 'version'>;
-
-export type WorkEventKind =
-  | 'report'
-  | 'ack'
-  | 'reply'
-  | 'handback'
-  | 'input'
-  | 'stop'
-  | 'approve'
-  | 'resume';
-
-export interface WorkEvent {
-  id: number;
-  workItemId: string;
-  kind: WorkEventKind;
-  state: string | null;
-  text: string;
-  triggerMessageId: string | null;
-  createdAt: string;
-}
-
-/** GET /api/work-items/:id. */
-export interface WorkItemDetail {
-  item: WorkItemView;
-  events: WorkEvent[];
-  subscriptions: { channelJid: string; subKey: string }[];
-}
 
 /** Ended items and recorded decisions fetched per workspace and shown. */
 export const WORK_RECENT_LIMIT = 20;
-
-/** Rule names stay short; the server allows 60 characters (src/schemas.ts). */
-export const TEAM_RULE_NAME_LIMIT = 60;
 
 type BadgeVariant = 'info' | 'success' | 'warning' | 'error' | 'neutral';
 

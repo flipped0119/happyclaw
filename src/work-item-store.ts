@@ -5,11 +5,14 @@
  * db.ts binds this module to its connection. The work item service is the
  * only writer; REST and views read through it as well.
  */
+export type { WorkEvent, WorkEventKind } from './work-items.js';
 import {
   parseTeamSettings,
   type TeamSettings,
   type WorkDecision,
   type WorkDecisionKind,
+  type WorkEvent,
+  type WorkEventKind,
   type WorkItem,
   type WorkItemOutcome,
   type WorkItemStatus,
@@ -485,26 +488,6 @@ export function findSubscribedWorkItems(
 }
 
 // ── Events ─────────────────────────────────────────────────────────────
-
-export type WorkEventKind =
-  | 'report'
-  | 'ack'
-  | 'reply'
-  | 'handback'
-  | 'input'
-  | 'stop'
-  | 'approve'
-  | 'resume';
-
-export interface WorkEvent {
-  id: number;
-  workItemId: string;
-  kind: WorkEventKind;
-  state: string | null;
-  text: string;
-  triggerMessageId: string | null;
-  createdAt: string;
-}
 
 /**
  * Append an event. An `ack` is unique per trigger across items, so a

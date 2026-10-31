@@ -60,7 +60,6 @@ import {
   unsubscribeWorkItem,
   updateWorkItem,
   type TeamMount,
-  type WorkEvent,
   type WorkItemPatch,
 } from './work-item-store.js';
 import {
@@ -69,6 +68,7 @@ import {
   laneJidOf,
   queueTeamReply,
 } from './work-item-runtime.js';
+import type { TeamMountView, WorkItemDetail } from './work-items.js';
 import {
   admitMessage,
   countImWords,
@@ -109,21 +109,7 @@ export class WorkItemError extends Error {
   }
 }
 
-export interface TeamMountView {
-  channelJid: string;
-  channelName: string | null;
-  /** False when the mount cannot run team mode, with the reason. */
-  eligible: boolean;
-  ineligibleReason: string | null;
-  settings: TeamSettings;
-  routerAgentId: string | null;
-}
-
-export interface WorkItemDetail {
-  item: WorkItemView;
-  events: WorkEvent[];
-  subscriptions: { channelJid: string; subKey: string }[];
-}
+export type { TeamMountView, WorkItemDetail } from './work-items.js';
 
 const TITLE_LIMIT = 60;
 const NOTE_WORD_LIMIT = 30;
