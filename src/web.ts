@@ -85,6 +85,7 @@ import { usage as usageRoutes } from './routes/usage.js';
 import billingRoutes from './routes/billing.js';
 import bugReportRoutes from './routes/bug-report.js';
 import guestRoutes from './routes/guests.js';
+import workItemRoutes from './routes/work-items.js';
 import { codexGatewayApp } from './codex-gateway/gateway.js';
 import { initCodexCatalogSync } from './codex-gateway/model-catalog-sync.js';
 import { CODEX_GATEWAY_ROUTE } from './codex-gateway/types.js';
@@ -377,6 +378,7 @@ app.route('/api/billing', billingRoutes);
 app.route('/api/bug-report', bugReportRoutes);
 app.route('/api/channel-accounts', channelAccountRoutes);
 app.route('/api/guests', guestRoutes);
+app.route('/api', workItemRoutes); // Team mode: /api/workspaces/:jid/team-mounts|work-items|work-decisions, /api/work-items
 // 不挂在 /api/* 下：网关用 provider gateway token 鉴权（x-api-key），
 // 不是浏览器 Cookie 会话，不需要也不应该套用 /api/* 的 CORS/Cookie 中间件。
 app.route(CODEX_GATEWAY_ROUTE, codexGatewayApp);

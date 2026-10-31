@@ -29,6 +29,7 @@
 | `/api/config`                      | `src/routes/config.ts`           | Provider、系统与兼容渠道配置  |
 | `/api/config`                      | `src/routes/brand-assets.ts`     | 品牌资源上传、删除与公开读取  |
 | `/api/automations`                 | `src/routes/automations.ts`      | 自动化和运行记录              |
+| `/api`                             | `src/routes/work-items.ts`       | 团队模式：群设置与工作项      |
 | `/api/tasks`                       | `src/routes/tasks.ts`            | 已废弃，一律 410              |
 | `/api/memory`                      | `src/routes/memory.ts`           | Workspace Memory v2           |
 | `/api/skills`                      | `src/routes/skills.ts`           | 用户 Skills                   |
@@ -972,6 +973,23 @@ Legacy 渠道 facade 位于 `/api/config/user-im/*`，涵盖飞书、Telegram、
 状态变化通过 WS `automation_changed` / `automation_run_updated` 只推给所有者。
 
 旧的 `/api/tasks*` 全部返回 410，提示改用 `/api/automations`。
+
+## 团队模式
+
+- `GET /api/workspaces/:jid/team-mounts` → `{ mounts }`，工作区的群绑定及其团队设置，
+  `eligible=false` 时带 `ineligibleReason`
+- `PUT /api/workspaces/:jid/team-mounts/:channelJid`，body `{ settings }`（不含
+  `version`，由服务端递增）→ `{ mount }`；规则最多 20 条，说明最长 2000 字
+- `GET /api/workspaces/:jid/work-items?status=open|ended&limit=` → `{ items }`
+- `GET /api/workspaces/:jid/work-decisions?kind=&limit=` → `{ decisions }`
+- `GET /api/work-items?needs=me` → `{ items }`，当前用户各工作区里等人处理的工作项
+- `GET /api/work-items/:id` → `{ item, events, subscriptions }`
+- `POST /api/work-items/:id/stop`、`/approve` → `{ item }`
+
+只服务工作区主人，没有管理员旁路，Host 工作区要求管理员，访客 403；权限见
+`docs/ACL-MATRIX.md` §4.7。校验和状态机在 `src/work-item-service.ts`，它的
+`WorkItemError` 按自带状态码返回 `{ error }`。工作项变化通过 WS `work_item_updated`
+只推给主人。
 
 ## Skills、MCP 和 Plugins
 
