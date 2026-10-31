@@ -52,7 +52,8 @@ export function param(c: RouteContext, name: string): string {
 export function parseLimit(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  return Number.isFinite(value) ? value : undefined;
+  // A row count: whole numbers only, so SQL LIMIT never sees a fraction.
+  return Number.isFinite(value) ? Math.trunc(value) : undefined;
 }
 
 /** The JSON body parsed with `schema`; throws `invalid()` when it does not fit. */
