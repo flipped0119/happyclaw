@@ -41,6 +41,8 @@ export interface FeishuConversationPlan {
   disabled: boolean;
   /** Whether a group message may pass without mentioning the bot. */
   allowWithoutMention: boolean;
+  /** Admitted nowhere, whatever its @ (team mode ignored it). */
+  rejectReason?: 'not_admitted';
   /** Whether this message belongs to an isolated conversation agent. */
   independentContext: boolean;
   /** Canonical, durable context identity used by im_context_bindings. */
@@ -48,9 +50,9 @@ export interface FeishuConversationPlan {
   /** Topic root used as the reply_in_thread anchor of an independent context. */
   rootMessageId?: string;
   /**
-   * Team mode (团队模式) decided where this group message goes. `subscribed`
-   * and `candidate` pass the @ gate (the decision replaces it); `ignore` is
-   * dropped like a message that failed activation. Absent outside team mode.
+   * Team mode (团队模式) decided where this group message goes. The decision
+   * replaces the @ requirement (allowWithoutMention / rejectReason). Absent
+   * outside team mode.
    */
   team?: FeishuTeamPlan;
   reason:

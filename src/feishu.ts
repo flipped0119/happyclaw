@@ -3954,10 +3954,10 @@ export function createFeishuConnection(
               { chatJid, messageId },
               'Dropped group message: mention required but bot not mentioned',
             );
-          } else if (decision.reason === 'team_ignored') {
+          } else if (decision.reason === 'not_admitted') {
             logger.debug(
               { chatJid, messageId },
-              'Dropped group message: team mode admitted it nowhere',
+              'Dropped group message: its conversation plan admitted it nowhere',
             );
           } else if (decision.reason === 'not_owner') {
             logger.debug(

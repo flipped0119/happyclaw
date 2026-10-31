@@ -320,44 +320,48 @@ describe('the most specific subscription', () => {
   });
 });
 
-describe('the @ gate in team mode', () => {
+describe('the @ gate with a plan that decided the message', () => {
   const base = {
     chatType: 'group',
     botOpenId: 'ou_bot',
     mentions: [],
     chatJid: CHAT,
   };
-  const plan = (outcome?: 'subscribed' | 'candidate' | 'ignore') => ({
-    disabled: false,
-    allowWithoutMention: false,
-    ...(outcome ? { team: { outcome } } : {}),
-  });
 
-  test('subscribed and candidate pass without an @, ignore never passes', () => {
+  test('allowed without an @, or out whatever its @', () => {
     expect(
-      evaluateMentionGate({ ...base, conversationPlan: plan('subscribed') }),
-    ).toEqual({ allow: true });
-    expect(
-      evaluateMentionGate({ ...base, conversationPlan: plan('candidate') }),
+      evaluateMentionGate({
+        ...base,
+        conversationPlan: { disabled: false, allowWithoutMention: true },
+      }),
     ).toEqual({ allow: true });
     expect(
       evaluateMentionGate({
         ...base,
         mentions: [{ id: { open_id: 'ou_bot' } }],
-        conversationPlan: plan('ignore'),
+        conversationPlan: {
+          disabled: false,
+          allowWithoutMention: false,
+          rejectReason: 'not_admitted',
+        },
       }),
-    ).toEqual({ allow: false, reason: 'team_ignored' });
+    ).toEqual({ allow: false, reason: 'not_admitted' });
   });
 
-  test('without team mode the gate is unchanged', () => {
-    expect(evaluateMentionGate({ ...base, conversationPlan: plan() })).toEqual({
-      allow: false,
-      reason: 'not_mentioned',
-    });
+  test('a plain plan keeps the @ requirement', () => {
     expect(
       evaluateMentionGate({
         ...base,
-        conversationPlan: { ...plan('candidate'), disabled: true },
+        conversationPlan: { disabled: false, allowWithoutMention: false },
+      }),
+    ).toEqual({ allow: false, reason: 'not_mentioned' });
+    expect(
+      evaluateMentionGate({
+        ...base,
+        conversationPlan: {
+          disabled: true,
+          allowWithoutMention: true,
+        },
       }),
     ).toEqual({ allow: false, reason: 'disabled' });
   });

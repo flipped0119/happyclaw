@@ -20752,7 +20752,17 @@ function resolveFeishuConversationPlanForMessage(
   });
   if (plan.disabled) return plan;
   const team = resolveTeamPlan(chatJid, messageMeta);
-  return team ? { ...plan, team } : plan;
+  if (!team) return plan;
+  // The team decision replaces the @ requirement: a subscribed thread needs
+  // no @, a candidate passed the team's own table, anything else is out.
+  return team.outcome === 'ignore'
+    ? {
+        ...plan,
+        team,
+        allowWithoutMention: false,
+        rejectReason: 'not_admitted',
+      }
+    : { ...plan, team, allowWithoutMention: true };
 }
 
 // ── Team mode (团队模式): gate, route and post-store ──────────────────────
