@@ -11743,7 +11743,9 @@ function mapAgentRow(row: Record<string, unknown>): SubAgent {
             | 'feishu_thread'
             | 'auto_im'
             | 'channel_direct'
-            | 'automation')
+            | 'automation'
+            | 'team_router'
+            | 'work_item')
         : null,
     thread_id: typeof row.thread_id === 'string' ? row.thread_id : null,
     root_message_id:
