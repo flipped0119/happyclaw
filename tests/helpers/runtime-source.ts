@@ -110,9 +110,9 @@ function automationDefaults(): Record<string, unknown> {
     isWorkIpcType: (type: unknown) =>
       (WORK_IPC_TYPES as readonly unknown[]).includes(type),
     resolveTeamRole: () => null,
+    teamLaneOf: () => null,
     // processAgentConversation's own: extracted callbacks close over it.
     teamRole: null,
-    teamRoleKey: () => null,
     resolveTeamRoute: () => null,
     afterTeamMessageStored: () => {},
     followupCopyIdsOf: () => [],

@@ -11,6 +11,12 @@ export interface FormatMessagesOptions {
    * transcript or in the recovery history prepended to this prompt.
    */
   knownMessageIds?: ReadonlySet<string>;
+  /**
+   * Trusted text the host puts around a message's escaped body (a team
+   * input's header and wrapping elements), or null for none. Only the host
+   * writes it: nothing in a message's own fields can produce one.
+   */
+  frameOf?: (message: NewMessage) => { before: string; after: string } | null;
 }
 
 function parseChannelJid(
@@ -202,10 +208,16 @@ export function formatMessages(
         ? `<referenced_messages>\n${REFERENCED_MESSAGES_NOTE}\n${references.join('\n')}\n</referenced_messages>\n`
         : '\n';
 
+    // A framed body still starts a line of its own, so an `@` at its start
+    // is read or neutralized exactly as in any other message.
+    const frame = options.frameOf?.(message);
+    const body = frame
+      ? `${frame.before}\n${escapeBody(message.content)}${frame.after}`
+      : escapeBody(message.content);
     const formatted =
       `<message id="${escapeXml(message.id)}" sender="${escapeXml(message.sender_name)}"` +
       `${sourceAttr}${replyAttr}${relationAttrs} time="${escapeXml(message.timestamp)}">` +
-      `${bodyStart}${escapeBody(message.content)}</message>`;
+      `${bodyStart}${body}</message>`;
     knownMessageIds.add(message.id);
     return `${formatted}${defaultForwardRequest(message, contentLink)}`;
   });

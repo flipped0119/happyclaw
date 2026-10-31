@@ -48,6 +48,7 @@ let replySeq = 0;
 const replies: runtime.TeamReplyRequest[] = [];
 const laneMessages: { laneJid: string; text: string; id: string }[] = [];
 const stopped: string[] = [];
+const drained: string[] = [];
 const broadcasts: string[] = [];
 let failReplies = false;
 let replyRetryable = false;
@@ -58,6 +59,7 @@ function installHooks(): void {
     wake: vi.fn(),
     broadcastNewMessage: vi.fn(),
     stopLane: (laneJid) => stopped.push(laneJid),
+    drainLane: (laneJid) => drained.push(laneJid),
     postReply: async (request) => {
       replies.push(request);
       if (failReplies) {
@@ -632,6 +634,8 @@ describe('work reports and approval', () => {
 
     const approved = await service.approveWorkItem(item.id, ACTOR);
     expect(approved.approvedAt).toBeTruthy();
+    // Its read-only warm runner is retired before the approval arrives.
+    expect(drained).toContain(`${WORKSPACE}#agent:${item.agentId}`);
     expect(service.resolveTeamRole(item.agentId)).toMatchObject({
       writable: true,
     });
@@ -769,7 +773,6 @@ describe('subscribed group messages', () => {
     expect(decision.kind).toBe('subscribed');
     if (decision.kind !== 'subscribed') return;
     expect(decision.items.map((item) => item.id)).toEqual([a.id, b.id]);
-    expect(decision.resumeIds).toEqual([b.id]);
     expect(store.getWorkItem(b.id)).toMatchObject({ status: 'open' });
     const copy = laneRows(`${WORKSPACE}#agent:${b.agentId}`).find(
       (row) => row.id === service.followupCopyId('om_follow', b.id),
@@ -1317,12 +1320,25 @@ describe('IPC a team session may not use', () => {
       undefined,
     ]) {
       expect(service.teamIpcRefusal('feishu_capability', write)).toMatch(
-        /only read/,
+        /work tools/,
       );
     }
-    expect(service.teamIpcRefusal('send_file', undefined)).toMatch(/only read/);
-    for (const type of ['automation_create', 'automation_list']) {
-      expect(service.teamIpcRefusal(type, undefined)).toMatch(/automations/);
+    expect(service.teamIpcRefusal('send_file', undefined)).toMatch(
+      /work tools/,
+    );
+    for (const type of [
+      'automation_create',
+      'automation_list',
+      'install_skill',
+      'uninstall_skill',
+      'message',
+      'image',
+      'schedule_task',
+    ]) {
+      expect(service.teamIpcRefusal(type, undefined)).toMatch(/work tools/);
+    }
+    for (const type of ['work_report', 'workspace_memory', 'fresh_window']) {
+      expect(service.teamIpcRefusal(type, undefined)).toBeNull();
     }
     expect(service.teamIpcRefusal('workspace_memory', undefined)).toBeNull();
   });

@@ -13,7 +13,6 @@
  */
 import crypto from 'crypto';
 
-import { isAutomationIpcType } from './automation-run-ledger.js';
 import { channelConversationJid } from './channel-address.js';
 import { resolveChannelConversationKind } from './channel-conversation-kind.js';
 import {
@@ -32,7 +31,7 @@ import {
 } from './session-factory.js';
 import {
   createSessionWorktree,
-  getWorktreeSupport,
+  WorktreeUnavailableError,
 } from './session-worktree.js';
 import {
   candidateInputItem,
@@ -40,7 +39,6 @@ import {
   readTeamInput,
   teamTriggerKeys,
   canResumeWorkItem,
-  forgetTeamDecisions,
   type TeamGateDeps,
   type TeamGateGroup,
   type TeamInboundDecision,
@@ -50,10 +48,12 @@ import type {
   ChannelMount,
   ChannelTurnContext,
   RegisteredGroup,
+  SubAgent,
 } from './types.js';
 import {
   getTeamMount,
   getTeamMountByRouter,
+  listAllTeamMounts,
   getWorkDecisionForTrigger,
   getWorkItem,
   getWorkItemByAgent,
@@ -66,6 +66,7 @@ import {
   insertWorkItemReply,
   isWorkItemReplyMessage,
   listPendingWorkItemReplies,
+  getLastWorkReport,
   listWorkDecisions,
   listWorkEvents,
   listWorkItems,
@@ -98,7 +99,13 @@ import {
   subscriptionKey,
   TEAM_RULE_LIMIT,
   TEAM_RULE_TEXT_LIMIT,
+  TEAM_LANE_POLICY,
+  teamLaneWithholdsTool,
   WORK_IPC_TYPES,
+  WORK_NOTE_WORD_LIMIT,
+  WORK_REPORT_STATES,
+  WORK_TITLE_CHAR_LIMIT,
+  isWorkItemWritable,
   type TeamRole,
   type TeamSettings,
   type WorkDecision,
@@ -131,8 +138,6 @@ export class WorkItemError extends Error {
 
 export type { TeamMountView, WorkItemDetail } from './work-items.js';
 
-const TITLE_LIMIT = 60;
-const NOTE_WORD_LIMIT = 30;
 const SUMMARY_CHAR_LIMIT = 4000;
 const REASON_CHAR_LIMIT = 500;
 
@@ -251,33 +256,35 @@ export function hasWorkerSession(item: WorkItem): boolean {
   return agent?.kind === 'conversation' && agent.chat_jid === item.workspaceJid;
 }
 
-/** The role a Runtime Session plays in team mode, or null for none. */
-export function resolveTeamRole(
-  agentId: string | null | undefined,
+/**
+ * The role a Runtime Session plays in team mode, or null for none, from the
+ * agent row the caller already holds: any other session stops at its
+ * source_kind, without a lookup.
+ */
+export function teamLaneOf(
+  agent: Pick<SubAgent, 'id' | 'source_kind'> | undefined,
 ): TeamRole | null {
-  if (!agentId) return null;
-  const agent = getAgent(agentId);
   if (agent?.source_kind === 'team_router') {
-    return getTeamMountByRouter(agentId) ? { role: 'router' } : null;
+    return getTeamMountByRouter(agent.id) ? { role: 'router' } : null;
   }
   if (agent?.source_kind === 'work_item') {
-    const item = getWorkItemByAgent(agentId);
-    if (!item) return null;
-    return {
-      role: 'worker',
-      workItemId: item.id,
-      writable: item.mandate.writable || !!item.approvedAt,
-    };
+    const item = getWorkItemByAgent(agent.id);
+    return item
+      ? {
+          role: 'worker',
+          workItemId: item.id,
+          writable: isWorkItemWritable(item),
+        }
+      : null;
   }
   return null;
 }
 
-/** The warm-runner identity of a team role (see RunnerMessageRequirements). */
-export function teamRoleKey(role: TeamRole | null): string | null {
-  if (!role) return null;
-  return role.role === 'router'
-    ? 'router'
-    : `worker:${role.workItemId}:${role.writable ? 'rw' : 'ro'}`;
+/** {@link teamLaneOf} for a session known by id. */
+export function resolveTeamRole(
+  agentId: string | null | undefined,
+): TeamRole | null {
+  return agentId ? teamLaneOf(getAgent(agentId)) : null;
 }
 
 // ── Views and broadcast ────────────────────────────────────────────────
@@ -526,8 +533,6 @@ export async function saveTeamMountSettings(
     updatedBy: actor.userId,
     now: now(),
   });
-  // Decisions made under the old settings route nothing any more.
-  forgetTeamDecisions(channelJid);
   if (!next.enabled) stopGroupWorkItems(channelJid, 'team_mode_off');
   if (newRouter && routerAgentId) {
     redeliverReportsToRouter(channelJid, workspaceJid, routerAgentId);
@@ -558,8 +563,26 @@ export function stopGroupWorkItems(channelJid: string, reason: string): void {
     broadcast(stopItem(item, reason));
   }
   // Nothing the group was still owed goes out any more.
-  for (const reply of listPendingWorkItemReplies()) {
-    if (reply.channelJid === channelJid) voidReply(reply, reason);
+  for (const reply of listPendingWorkItemReplies(channelJid)) {
+    voidReply(reply, reason);
+  }
+}
+
+/**
+ * Whether a chat may run team mode at all: a Feishu chat with a team mount
+ * row. One indexed lookup; every other chat stops here.
+ */
+export function mayRunTeamMode(channelJid: string): boolean {
+  return (
+    channelJid.startsWith('feishu:') &&
+    getTeamMount(channelJid)?.settings.enabled === true
+  );
+}
+
+/** Reconcile every team-mode group once (startup). */
+export function reconcileAllTeamGroups(): void {
+  for (const team of listAllTeamMounts()) {
+    if (team.settings.enabled) reconcileTeamGroup(team.channelJid);
   }
 }
 
@@ -681,10 +704,7 @@ function stopItem(item: WorkItem, by: string, stopLane = true): WorkItem {
 }
 
 /** End an item as stopped by a person; interrupts its worker. */
-export async function stopWorkItem(
-  id: string,
-  _actor: WorkItemActor,
-): Promise<WorkItemView> {
+export function stopWorkItem(id: string, _actor?: WorkItemActor): WorkItemView {
   const item = requireItem(id);
   if (item.status === 'ended') {
     if (item.outcome === 'stopped') return toView(item);
@@ -694,19 +714,23 @@ export async function stopWorkItem(
 }
 
 /** Allow edits on an item that started read-only, and tell its worker. */
-export async function approveWorkItem(
+export function approveWorkItem(
   id: string,
-  _actor: WorkItemActor,
-): Promise<WorkItemView> {
+  _actor?: WorkItemActor,
+): WorkItemView {
   const item = requireItem(id);
   if (item.status === 'ended') throw new WorkItemError('工作项已经结束', 409);
-  if (item.mandate.writable || item.approvedAt) {
+  if (isWorkItemWritable(item)) {
     throw new WorkItemError('工作项已经可以修改', 409);
   }
   const approved = patchItem(item, { approvedAt: now() });
   recordWorkEvent({ workItemId: item.id, kind: 'approve', now: now() });
-  // The worker's role changes with this (writable), so its next turn starts
-  // on a fresh runner with the edit tools restored.
+  // The worker's role changes with this (writable): its warm runner, started
+  // without the edit tools, finishes its turn and the approval starts a
+  // fresh one with them restored.
+  getWorkItemRuntimeHooks().drainLane(
+    laneJidOf(item.workspaceJid, item.agentId),
+  );
   injectTeamInput({
     workspaceJid: item.workspaceJid,
     agentId: item.agentId,
@@ -1075,15 +1099,18 @@ function scheduleReply(id: string, delayMs: number): void {
   replyTimers.set(id, { timer, dueAt: Date.now() + delayMs });
 }
 
+function cancelReplyTimer(id: string): void {
+  const waiting = replyTimers.get(id);
+  if (!waiting) return;
+  clearTimeout(waiting.timer);
+  replyTimers.delete(id);
+}
+
 /** Send every reply still owed, after a restart. Ids only are logged. */
 export function resumePendingTeamReplies(): void {
   const pending = listPendingWorkItemReplies();
   for (const reply of pending) {
-    const waiting = replyTimers.get(reply.id);
-    if (waiting) {
-      clearTimeout(waiting.timer);
-      replyTimers.delete(reply.id);
-    }
+    cancelReplyTimer(reply.id);
     scheduleReply(reply.id, 0);
   }
   if (pending.length > 0) {
@@ -1102,8 +1129,7 @@ export async function settleTeamReplies(): Promise<void> {
   for (let round = 0; round < 50; round++) {
     for (const [id, waiting] of replyTimers) {
       if (waiting.dueAt > Date.now()) continue;
-      clearTimeout(waiting.timer);
-      replyTimers.delete(id);
+      cancelReplyTimer(id);
       void sendReply(id);
     }
     await new Promise((resolve) => setImmediate(resolve));
@@ -1162,11 +1188,7 @@ async function sendReply(id: string): Promise<void> {
 
 /** A reply that must not go out any more; no question for anyone. */
 function voidReply(reply: WorkItemReply, reason: string): void {
-  const waiting = replyTimers.get(reply.id);
-  if (waiting) {
-    clearTimeout(waiting.timer);
-    replyTimers.delete(reply.id);
-  }
+  cancelReplyTimer(reply.id);
   updateWorkItemReply(reply.id, { status: 'failed', error: reason }, now());
   logger.info(
     { replyId: reply.id, workItemId: reply.workItemId, reason },
@@ -1273,13 +1295,16 @@ async function createWorkerSession(
   const workspace = context.workspace;
   let worktree = null;
   if (workspace.executionMode === 'host') {
-    const support = await getWorktreeSupport(workspace);
-    if (support.available) {
+    // A worktree when the directory is a git repository; a plain session
+    // when it cannot have one (not a repository, no commits).
+    try {
       worktree = await createSessionWorktree({
         group: workspace,
         chatJid: context.workspaceJid,
         agentId: sessionId,
       });
+    } catch (error) {
+      if (!(error instanceof WorktreeUnavailableError)) throw error;
     }
   }
   const session = await createConversationSession({
@@ -1307,8 +1332,8 @@ async function acceptCandidate(
   refuseDecided(router, candidate);
   const title = typeof route.title === 'string' ? route.title.trim() : '';
   if (!title) fail('accept needs a title.');
-  if ([...title].length > TITLE_LIMIT) {
-    fail(`title is limited to ${TITLE_LIMIT} characters.`);
+  if ([...title].length > WORK_TITLE_CHAR_LIMIT) {
+    fail(`title is limited to ${WORK_TITLE_CHAR_LIMIT} characters.`);
   }
   const acknowledgement = requireImText(
     route.acknowledgement,
@@ -1476,11 +1501,11 @@ function subscribeTrigger(
   }
 }
 
-/** A router note: routing background of at most NOTE_WORD_LIMIT words. */
+/** A router note: routing background of at most WORK_NOTE_WORD_LIMIT words. */
 function optionalNote(value: unknown): string | null {
   const note = optionalText(value, 2000);
-  if (note && countImWords(note) > NOTE_WORD_LIMIT) {
-    fail(`note is limited to ${NOTE_WORD_LIMIT} words.`);
+  if (note && countImWords(note) > WORK_NOTE_WORD_LIMIT) {
+    fail(`note is limited to ${WORK_NOTE_WORD_LIMIT} words.`);
   }
   return note;
 }
@@ -1658,9 +1683,7 @@ function acknowledge(
 
 /** The last report a result answers (ready, blocked or failed), if any. */
 function lastResultReportId(item: WorkItem): number | null {
-  const last = listWorkEvents(item.id, 200)
-    .filter((event) => event.kind === 'report' && event.state !== 'undelivered')
-    .at(-1);
+  const last = getLastWorkReport(item.id);
   return last &&
     (last.state === 'ready' ||
       last.state === 'blocked' ||
@@ -1777,14 +1800,7 @@ function handleWorkList(
   return { items };
 }
 
-const REPORT_STATES = new Set<WorkReportState>([
-  'progress',
-  'waiting',
-  'ready',
-  'blocked',
-  'failed',
-  'dropped',
-]);
+const REPORT_STATES: ReadonlySet<string> = new Set(WORK_REPORT_STATES);
 
 function handleWorkReport(
   caller: WorkIpcCaller,
@@ -1810,7 +1826,7 @@ function handleWorkReport(
       : {}),
   };
   let updated: WorkItem;
-  if (state === 'ready' && (item.mandate.writable || item.approvedAt)) {
+  if (state === 'ready' && isWorkItemWritable(item)) {
     updated = endItem(item, 'completed', patch);
   } else if (state === 'dropped') {
     updated = endItem(item, 'dropped', { ...patch, attention: null });
@@ -2041,36 +2057,35 @@ export function countOpenWorkItems(channelJid: string): number {
   return countWorkItemsByChannel(channelJid, 'open');
 }
 
+/** IPC request types of tools that are not their own name. */
+const IPC_TYPE_TOOL: Record<string, string> = {
+  message: 'send_message',
+  image: 'send_image',
+};
+
 /**
- * Refuse a team session's IPC that would reach a chat or the Feishu API
- * beyond reading, or schedule an automation. Team sessions speak only through the team tools; of the
- * Feishu capabilities they keep exactly the reads (an allowlist, so a new
- * capability stays refused until it is added here). Null when allowed.
+ * Why a team session's IPC request is refused, or null when it may run. One
+ * table for both sides (TEAM_LANE_POLICY): the Runner does not register these
+ * tools, and the host refuses their requests. Of the Feishu capabilities a
+ * team session keeps exactly the reads (an allowlist, so a new capability
+ * stays refused until it is added there).
  */
 export function teamIpcRefusal(
   type: string,
   operation: string | undefined,
 ): string | null {
-  if (type === 'send_file') return TEAM_SESSION_TOOL_REFUSAL;
-  // A team session's work is a work item: it schedules nothing.
-  if (isAutomationIpcType(type)) return TEAM_SESSION_AUTOMATION_REFUSAL;
   if (type === 'feishu_capability') {
-    return operation && TEAM_FEISHU_READ_OPERATIONS.has(operation)
+    return operation &&
+      (TEAM_LANE_POLICY.feishuReadOperations as readonly string[]).includes(
+        operation,
+      )
       ? null
       : TEAM_SESSION_TOOL_REFUSAL;
   }
-  return null;
+  return teamLaneWithholdsTool(IPC_TYPE_TOOL[type] ?? type)
+    ? TEAM_SESSION_TOOL_REFUSAL
+    : null;
 }
 
-const TEAM_FEISHU_READ_OPERATIONS: ReadonlySet<string> = new Set([
-  'get_chat',
-  'list_members',
-  'get_user',
-  'get_history',
-]);
-
-const TEAM_SESSION_AUTOMATION_REFUSAL =
-  'Team-mode sessions do not use automations; a recurring need is a request for the router.';
-
 const TEAM_SESSION_TOOL_REFUSAL =
-  'Team-mode sessions only read from Feishu. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';
+  'Team-mode sessions use only their work tools and Feishu reads: a router replies with work_reply; a worker acknowledges with work_ack and reports with work_report. Messages, files, cards, automations and Skill changes are not theirs to make.';

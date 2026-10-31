@@ -1155,6 +1155,9 @@ function planFeishuRoute(
   const inThread = !!plan?.independentContext || !!threadId;
   const routedMeta: FeishuMessageMeta = {
     ...meta,
+    // Team mode decided the lane with the message as it arrived (its root
+    // included); the router uses that decision as is.
+    ...(plan?.team ? { teamRoute: plan.team.route } : {}),
     nativeContextType:
       plan?.independentContext || (!plan && !!threadId) ? 'thread' : undefined,
     contextId: plan?.contextId || threadId,
@@ -3951,10 +3954,10 @@ export function createFeishuConnection(
               { chatJid, messageId },
               'Dropped group message: mention required but bot not mentioned',
             );
-          } else if (decision.reason === 'team_ignored') {
+          } else if (decision.reason === 'not_admitted') {
             logger.debug(
               { chatJid, messageId },
-              'Dropped group message: team mode admitted it nowhere',
+              'Dropped group message: its conversation plan admitted it nowhere',
             );
           } else if (decision.reason === 'not_owner') {
             logger.debug(
