@@ -237,3 +237,23 @@ describe('no card a team-mode group could click', () => {
     ).toContain('AskUserQuestion');
   });
 });
+
+describe('a suppressed proactive final', () => {
+  test('is a warning for an ordinary session and a debug line for a team lane', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const harness = createRuntimeSourceHarness({ logger });
+    harness.install('logSuppressedProactiveFinal');
+    const log = harness.globals.logSuppressedProactiveFinal as (
+      ...a: unknown[]
+    ) => void;
+    log(null, { agentId: 's1' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    log(
+      { role: 'worker', workItemId: 'w1', writable: true },
+      { agentId: 'w1' },
+    );
+    log({ role: 'router' }, { agentId: 'r1' });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.debug).toHaveBeenCalledTimes(2);
+  });
+});
