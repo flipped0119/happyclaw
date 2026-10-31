@@ -4357,6 +4357,21 @@ function admitComposedLaneInput(input: {
   return 'queued';
 }
 
+/**
+ * A proactive session's SDK final is never published. For a team lane that
+ * is every turn by design (it speaks through the team tools, never
+ * send_message), so it is only a debug line there.
+ */
+function logSuppressedProactiveFinal(
+  teamRole: TeamRole | null,
+  fields: Record<string, unknown>,
+): void {
+  const message =
+    'Suppressed Proactive agent SDK final without send_message delivery';
+  if (teamRole) logger.debug(fields, message);
+  else logger.warn(fields, message);
+}
+
 /** Post one team reply (team mode) through the durable Outbox. */
 function deliverTeamReply(
   request: TeamReplyRequest,
@@ -17727,15 +17742,12 @@ async function processAgentConversation(
       } else if (output.proactiveFinalCandidate?.trim()) {
         // Conversation Agents obey the same strict delivery boundary as the
         // main Agent: only send_message may create a user-visible utterance.
-        logger.warn(
-          {
-            chatJid,
-            agentId,
-            inputTurnId: proactiveInputId,
-            inputTurnCompleted: output.inputTurnCompleted === true,
-          },
-          'Suppressed Proactive agent SDK final without send_message delivery',
-        );
+        logSuppressedProactiveFinal(teamRole, {
+          chatJid,
+          agentId,
+          inputTurnId: proactiveInputId,
+          inputTurnCompleted: output.inputTurnCompleted === true,
+        });
       }
       output.result = null;
       if (
@@ -19909,7 +19921,16 @@ function recoverPendingMessages(): void {
       }
 
       logger.info(
-        { group: group.name, pendingCount: pending.length },
+        {
+          group: group.name,
+          chatJid,
+          pendingCount: pending.length,
+          // Why this chat was looked at, and from where.
+          committedSequence: committedCursor?.sequence ?? null,
+          pullWasAhead,
+          typedDelivery: startupRecoveredDeliveryJids.has(chatJid),
+          firstPendingSequence: pending[0]?.ingest_sequence ?? null,
+        },
         'Recovery: found unprocessed messages',
       );
       recoveryGroups.add(chatJid);
