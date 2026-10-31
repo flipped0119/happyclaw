@@ -365,22 +365,22 @@ function menuRowText(
   row: ModelRow,
   sole: boolean,
 ): { title: string; detail: string } {
-  const detail = (first: string) =>
+  const detail = (first: string | null) =>
     [first, row.note, optionStatus(row.option)].filter(Boolean).join(' · ');
   return sole
-    ? { title: row.option.name, detail: detail(row.id || '由中转站决定') }
+    ? { title: row.option.name, detail: detail(null) }
     : { title: row.id || '由中转站决定', detail: detail(row.option.name) };
 }
 
 /**
- * A phone's menus after iOS's: a large corner and a soft shadow,
- * rows edge to edge with hairlines between them, sections set apart by a
- * gap rather than a line.
+ * A phone's menus after iOS's context menu: a large corner on a faint gray,
+ * rows edge to edge with hairlines between them and the check leading,
+ * sections set apart by a gap rather than a line.
  */
 const PHONE_MENU_CLASS =
-  'overflow-hidden rounded-2xl bg-popover p-0 shadow-floating ring-foreground/10';
+  'overflow-hidden rounded-2xl bg-[color-mix(in_oklab,var(--popover)_94%,var(--foreground))] p-0 shadow-floating ring-foreground/10';
 const PHONE_MENU_ROW_CLASS =
-  'rounded-none px-3 pr-10 [&>[data-slot$=indicator]]:right-3.5';
+  'min-h-11 rounded-none pr-3.5 pl-10 [&>[data-slot$=indicator]]:right-auto [&>[data-slot$=indicator]]:left-3.5';
 
 /** The gap between the sections of a phone's menu. */
 function MenuGap() {
@@ -547,13 +547,10 @@ function effortShown(context: EffortContext): {
  * 34px chip of the vendor mark alone, its touch target padded to 44px.
  */
 const PHONE_PILL_CLASS =
-  'relative inline-flex h-[34px] max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full border border-surface-border bg-muted text-caption font-medium text-foreground transition-colors duration-100 before:absolute before:-inset-[5px] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none active:bg-surface-hover aria-disabled:cursor-default data-[state=open]:bg-surface-hover';
+  'relative inline-flex h-[34px] max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground/[0.06] text-caption font-medium text-foreground transition-colors duration-100 before:absolute before:-inset-[5px] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none active:bg-surface-hover aria-disabled:cursor-default data-[state=open]:bg-surface-hover';
 
 function phonePillClass(compact: boolean): string {
-  return cn(
-    PHONE_PILL_CLASS,
-    compact ? 'w-[34px] justify-center' : 'pr-2.5 pl-1.5',
-  );
+  return cn(PHONE_PILL_CLASS, compact ? 'w-[34px] justify-center' : 'px-2.5');
 }
 
 /**
@@ -938,8 +935,14 @@ export function ModelSelector({
   ) : inUse.option && !unusable ? (
     <VendorTile
       size="sm"
+      plain={phone && !compact}
       vendor={vendorOf(inUse.option, inUse.model)}
       name={inUse.option.name}
+    />
+  ) : phone && !compact ? (
+    <Sparkles
+      className="size-3.5 shrink-0 text-muted-foreground"
+      aria-hidden="true"
     />
   ) : (
     <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-surface-selected text-muted-foreground">
@@ -1348,9 +1351,10 @@ function ModelMenu({
           // A default that cannot run is not offered as a choice.
           disabled={disabled || (unusable && selectedKey !== DEFAULT_ROW_KEY)}
           mark={
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-selected text-muted-foreground">
-              <Sparkles className="size-3.5" aria-hidden="true" />
-            </span>
+            <Sparkles
+              className="size-4 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
           }
           title={defaultSourceLabel(selection)}
           detail={defaultDetail}
@@ -1369,6 +1373,7 @@ function ModelMenu({
                   <VendorTile
                     vendor={vendorOf(row.option, row.id)}
                     name={row.option.name}
+                    plain
                   />
                 }
                 title={text.title}
@@ -1382,10 +1387,10 @@ function ModelMenu({
       {onAddModel && (
         <DropdownMenuItem
           onSelect={onAddModel}
-          className="rounded-none border-b border-surface-border px-3 text-primary-text"
+          className="min-h-11 rounded-none border-b border-surface-border pr-3.5 pl-10 text-primary-text"
         >
+          <span className="flex-1">添加模型…</span>
           <Plus aria-hidden="true" />
-          添加模型…
         </DropdownMenuItem>
       )}
       <div className="px-3 py-2 empty:hidden">{footer}</div>
@@ -1417,20 +1422,23 @@ function MenuRow({
       title={title}
       className={cn(PHONE_MENU_ROW_CLASS, 'gap-3 py-2')}
     >
-      {mark}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body text-foreground">
           {title}
         </span>
-        <span
-          className={cn(
-            'block truncate text-caption',
-            warning ? 'text-warning' : 'text-muted-foreground',
-          )}
-        >
-          {detail}
-        </span>
+        {detail && (
+          <span
+            data-row-detail=""
+            className={cn(
+              'block truncate text-caption',
+              warning ? 'text-warning' : 'text-muted-foreground',
+            )}
+          >
+            {detail}
+          </span>
+        )}
       </span>
+      {mark}
     </DropdownMenuRadioItem>
   );
 }

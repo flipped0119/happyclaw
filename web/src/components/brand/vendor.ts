@@ -29,6 +29,7 @@ const VENDOR_BY_PRESET: Readonly<Record<string, VendorKind>> = {
 /** Hosts of the vendors' own endpoints, matched on DNS boundaries. */
 const VENDOR_BY_HOST: ReadonlyArray<readonly [string, VendorKind]> = [
   ['anthropic.com', 'anthropic'],
+  ['generativelanguage.googleapis.com', 'google'],
   ['openai.com', 'openai'],
   ['chatgpt.com', 'openai'],
   ['openrouter.ai', 'openrouter'],
@@ -56,6 +57,7 @@ const VENDOR_BY_HOST: ReadonlyArray<readonly [string, VendorKind]> = [
 const VENDOR_BY_MODEL: ReadonlyArray<readonly [RegExp, VendorKind]> = [
   [/^(claude|opus|sonnet|haiku|fable)\b/, 'anthropic'],
   [/^(gpt|chatgpt|codex|o\d)\b/, 'openai'],
+  [/^gemini/, 'google'],
   [/^glm\b/, 'zhipu'],
   [/^(kimi|k\d)/, 'moonshot'],
   [/^deepseek/, 'deepseek'],
@@ -71,6 +73,7 @@ const VENDOR_BY_MODEL: ReadonlyArray<readonly [RegExp, VendorKind]> = [
 /** Vendor prefixes gateways put before a model (`z-ai/glm-5.2`). */
 const VENDOR_BY_PREFIX: Readonly<Record<string, VendorKind>> = {
   anthropic: 'anthropic',
+  google: 'google',
   openai: 'openai',
   'z-ai': 'zhipu',
   zhipu: 'zhipu',

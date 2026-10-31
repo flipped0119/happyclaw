@@ -38,7 +38,7 @@ are used only to identify the vendor.
 - Source: https://github.com/simple-icons/simple-icons, version 16.27.0
 - License: CC0-1.0
 - Marks: Anthropic, DeepSeek, Moonshot AI, Alibaba Cloud, Xiaomi, OpenRouter,
-  ByteDance
+  ByteDance, Google Gemini
 
 ### Lobe Icons
 

@@ -7,6 +7,8 @@ interface VendorTileProps {
   /** The connection or model the tile stands for; its first letter is the fallback. */
   name: string;
   size?: 'sm' | 'md';
+  /** The mark alone, without its tile; nothing when no mark is known. */
+  plain?: boolean;
   className?: string;
 }
 
@@ -18,9 +20,41 @@ export function VendorTile({
   vendor,
   name,
   size = 'md',
+  plain = false,
   className,
 }: VendorTileProps) {
   const mark = vendor ? VENDOR_MARKS[vendor] : null;
+  // A tile's mark is a size smaller than a plain one.
+  const glyphSize = plain
+    ? size === 'sm'
+      ? 'size-3.5'
+      : 'size-4'
+    : size === 'sm'
+      ? 'size-3'
+      : 'size-4';
+  const glyph = mark && (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      fillRule={'evenOdd' in mark ? 'evenodd' : undefined}
+      className={glyphSize}
+    >
+      {mark.paths.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+  if (plain) {
+    return glyph ? (
+      <span
+        aria-hidden="true"
+        data-vendor={vendor ?? undefined}
+        className={cn('flex shrink-0 text-foreground', className)}
+      >
+        {glyph}
+      </span>
+    ) : null;
+  }
   return (
     <span
       aria-hidden="true"
@@ -31,17 +65,8 @@ export function VendorTile({
         className,
       )}
     >
-      {mark ? (
-        <svg
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          fillRule={'evenOdd' in mark ? 'evenodd' : undefined}
-          className={size === 'sm' ? 'size-3' : 'size-4'}
-        >
-          {mark.paths.map((d) => (
-            <path key={d} d={d} />
-          ))}
-        </svg>
+      {glyph ? (
+        glyph
       ) : (
         <span
           className={cn(

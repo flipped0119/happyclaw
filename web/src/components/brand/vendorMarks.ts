@@ -6,7 +6,7 @@
  * Sources (see THIRD_PARTY_NOTICES.md):
  * - Simple Icons 16.27.0, CC0-1.0, https://github.com/simple-icons/simple-icons
  *   (anthropic, deepseek, moonshotai, alibabacloud, xiaomi, openrouter,
- *   bytedance).
+ *   bytedance, googlegemini).
  * - Lobe Icons, @lobehub/icons-static-svg 1.101.0, MIT, Copyright (c) 2023
  *   LobeHub, https://github.com/lobehub/lobe-icons (openai, chatglm, kimi,
  *   minimax, stepfun, longcat, hunyuan, opencode, siliconcloud).
@@ -19,6 +19,12 @@ export interface VendorMark {
 }
 
 export const VENDOR_MARKS = {
+  // Google Gemini (Simple Icons)
+  google: {
+    paths: [
+      'M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81',
+    ],
+  },
   // Anthropic (Simple Icons)
   anthropic: {
     paths: [

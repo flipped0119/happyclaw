@@ -1609,10 +1609,9 @@ describe("a phone's model menu", () => {
   beforeEach(() => emulate(PHONE, NARROW));
   afterEach(() => vi.restoreAllMocks());
 
-  /** A menu row's second line (its first span is the check indicator). */
+  /** A menu row's second line; '' when it has one line. */
   const menuDetail = (title: string) =>
-    row(title)?.querySelector(':scope > span:last-child')?.lastElementChild
-      ?.textContent ?? '';
+    row(title)?.querySelector('[data-row-detail]')?.textContent ?? '';
 
   function few(): SessionModelSelection {
     const base = effortSelection({ selectedModelConfigId: 'glm' });
@@ -1629,7 +1628,8 @@ describe("a phone's model menu", () => {
     expect(sheet()).toBeNull();
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     expect(titles()).toEqual(['未选择模型', 'opus', 'sonnet', 'haiku', 'GLM']);
-    expect(menuDetail('GLM')).toContain('glm-5.3');
+    // One model: its connection's name alone, on one line.
+    expect(menuDetail('GLM')).toBe('');
     expect(menuDetail('opus')).toContain('Claude 官方');
     expect(checked().map((item) => item.getAttribute('title'))).toEqual([
       'GLM',

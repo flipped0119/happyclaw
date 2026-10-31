@@ -24,6 +24,8 @@ describe('vendorOfModel', () => {
     expect(vendorOfModel('deepseek-v4-pro')).toBe('deepseek');
     expect(vendorOfModel('MiniMax-M3')).toBe('minimax');
     expect(vendorOfModel('qwen3.8-max')).toBe('alibaba');
+    expect(vendorOfModel('gemini-3.8-flash-high')).toBe('google');
+    expect(vendorOfModel('google/gemini-3.8-pro')).toBe('google');
     expect(vendorOfModel('mimo-v2.6-pro')).toBe('xiaomi');
     expect(vendorOfModel('z-ai/glm-5.2')).toBe('zhipu');
     expect(vendorOfModel('moonshotai/kimi-k2.6')).toBe('moonshot');
