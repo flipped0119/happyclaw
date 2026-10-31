@@ -96,6 +96,7 @@ const SCHEME_LABELS: Record<ColorScheme, string> = {
   default: '经典绿',
   orange: '暖橙',
   neutral: '素白',
+  ios: '原生',
 };
 
 function workspaceLabel(group: GroupInfo): string {

@@ -93,6 +93,7 @@
         // unknown key means the default orange scheme.
         var c = localStorage.getItem('happyclaw-color-scheme');
         if (c === 'neutral') d.classList.add('theme-neutral');
+        else if (c === 'ios') d.classList.add('theme-ios');
         else if (c !== 'default') d.classList.add('theme-orange');
         // 主题已确定：两条按系统明暗的 theme-color 合并成一条，useTheme 之后
         // 只更新这一条。

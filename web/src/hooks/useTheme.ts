@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 
 export type Theme = 'light' | 'dark' | 'system';
-export type ColorScheme = 'default' | 'orange' | 'neutral';
+export type ColorScheme = 'default' | 'orange' | 'neutral' | 'ios';
 export type FontStyle = 'default' | 'anthropic';
 
 const THEME_KEY = 'happyclaw-theme';
@@ -33,7 +33,12 @@ function readTheme(): Theme {
 function readColorScheme(): ColorScheme {
   if (typeof window === 'undefined') return 'orange';
   const stored = window.localStorage.getItem(SCHEME_KEY);
-  if (stored === 'default' || stored === 'orange' || stored === 'neutral')
+  if (
+    stored === 'default' ||
+    stored === 'orange' ||
+    stored === 'neutral' ||
+    stored === 'ios'
+  )
     return stored;
   return 'orange';
 }
@@ -80,6 +85,7 @@ function applyColorScheme(scheme: ColorScheme) {
     'theme-neutral',
     scheme === 'neutral',
   );
+  document.documentElement.classList.toggle('theme-ios', scheme === 'ios');
   syncMetaThemeColor();
 }
 

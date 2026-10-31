@@ -35,6 +35,7 @@ const SCHEME_OPTIONS: { value: ColorScheme; label: string; swatch: string }[] =
     { value: 'default', label: '经典绿', swatch: '#0d9488' },
     { value: 'orange', label: '暖橙', swatch: 'oklch(0.646 0.222 41.116)' },
     { value: 'neutral', label: '素白', swatch: '#52525b' },
+    { value: 'ios', label: '原生', swatch: '#007aff' },
   ];
 
 function AppearanceItems() {

@@ -154,6 +154,8 @@
    Primary: #0d9488 (Teal) | Base: Slate
    ===================================================== */
 :root {
+  /* Form controls, scrollbars and the iOS keyboard follow the page's mode. */
+  color-scheme: light;
   /* shadcn/ui semantic tokens */
   --background: #ffffff;
   /* QR codes keep a white quiet zone in every scheme so phones can scan them. */
@@ -413,6 +415,109 @@ html.dark.theme-orange {
 }
 
 /* =====================================================
+   iOS theme — the system look (Jarvis's 液态玻璃 style)
+   Primary: system blue | Base: system backgrounds, SF Pro
+   ===================================================== */
+html.theme-ios {
+  --background: #ffffff;
+  --qr-quiet-zone: #ffffff;
+  --foreground: #000000;
+  /* systemBlue is a fill (4.0:1 on white); text takes the darker blue. */
+  --primary-text: #0066d6;
+  --card: #f2f2f7;
+  --card-foreground: #000000;
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --primary: #007aff;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f2f7;
+  --secondary-foreground: #000000;
+  --muted: #f2f2f7;
+  --muted-foreground: #6c6c70;
+  --accent: #f2f2f7;
+  --accent-foreground: #000000;
+  --destructive: #ff3b30;
+  --destructive-foreground: #ffffff;
+  --border: #d1d1d6;
+  --input: #d1d1d6;
+  --ring: #007aff;
+  --brand-50: #eaf3ff;
+  --brand-100: #d6e8ff;
+  --brand-200: #add1ff;
+  --brand-300: #7ab6ff;
+  --brand-400: #3d95ff;
+  --brand-500: #007aff;
+  --brand-600: #0062cc;
+  --brand-700: #004a99;
+  --surface: #ffffff;
+  --sidebar-foreground: #000000;
+  --sidebar-primary: #007aff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e5e5ea;
+  --sidebar-accent-foreground: #000000;
+  --sidebar-border: #d1d1d6;
+  --sidebar-ring: #007aff;
+  --code-block-bg: #f2f2f7;
+  --inline-code-bg: rgba(0, 122, 255, 0.08);
+  --inline-code-text: #0066d6;
+}
+
+html.dark.theme-ios {
+  --background: #000000;
+  --qr-quiet-zone: #ffffff;
+  --foreground: #ffffff;
+  --primary-text: #409cff;
+  --card: #1c1c1e;
+  --card-foreground: #ffffff;
+  --popover: #1c1c1e;
+  --popover-foreground: #ffffff;
+  --primary: #0a84ff;
+  --primary-foreground: #ffffff;
+  --secondary: #2c2c2e;
+  --secondary-foreground: #ffffff;
+  --muted: #2c2c2e;
+  --muted-foreground: #a1a1a8;
+  --accent: #2c2c2e;
+  --accent-foreground: #ffffff;
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
+  --border: #38383a;
+  --input: #3a3a3c;
+  --ring: #0a84ff;
+  --brand-50: #001a33;
+  --brand-100: #002d5c;
+  --brand-200: #004a99;
+  --brand-300: #0062cc;
+  --brand-400: #0a84ff;
+  --brand-500: #409cff;
+  --brand-600: #70b5ff;
+  --brand-700: #a3cfff;
+  --surface: #1c1c1e;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #0a84ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2c2c2e;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #38383a;
+  --sidebar-ring: #0a84ff;
+  --code-block-bg: rgba(255, 255, 255, 0.06);
+  --inline-code-bg: rgba(10, 132, 255, 0.16);
+  --inline-code-text: #64b0ff;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* The system font (SF Pro, PingFang on Apple devices) instead of Inter,
+   unless the Anthropic font style asks for its own. */
+html.theme-ios:not(.font-anthropic) body,
+html.theme-ios:not(.font-anthropic) input,
+html.theme-ios:not(.font-anthropic) textarea,
+html.theme-ios:not(.font-anthropic) button {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', system-ui,
+    'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+}
+
+/* =====================================================
    Anthropic font style — serif AI responses
    Uses direct font-family overrides because @theme inline
    bakes values into utilities at build time.
@@ -444,6 +549,7 @@ html.font-anthropic .font-mono {
    Dark mode token overrides
    ===================================================== */
 .dark {
+  color-scheme: dark;
   --background: #0f172a;
   --qr-quiet-zone: #ffffff;
   --foreground: #e2e8f0;

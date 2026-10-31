@@ -51,6 +51,7 @@ const SCHEME_OPTIONS: {
   { value: 'default', label: '经典绿', accent: '#0d9488' },
   { value: 'orange', label: '暖橙', accent: '#f97316' },
   { value: 'neutral', label: '素白', accent: '#52525b' },
+  { value: 'ios', label: '原生', accent: '#007aff' },
 ];
 
 const FONT_OPTIONS: { value: FontStyle; label: string }[] = [
@@ -104,7 +105,7 @@ function ColorSchemePicker({
     <div
       role="radiogroup"
       aria-label="配色方案"
-      className="grid grid-cols-3 gap-2"
+      className="grid grid-cols-2 gap-2 min-[420px]:grid-cols-4"
     >
       {SCHEME_OPTIONS.map((option) => {
         const active = value === option.value;
