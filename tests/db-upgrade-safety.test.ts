@@ -217,6 +217,9 @@ describe('schema version head', () => {
     // and task_failure_notices are dropped (automation-migration.test.ts).
     // v86: users.guest_owner_id and guest_workspace_grants, read-only guest
     // accounts (schema-v86-guest-accounts.test.ts).
-    expect(db.CURRENT_SCHEMA_VERSION).toBe(86);
+    // v87: team mode (team_mounts, work_items, work_item_subscriptions,
+    // work_item_events, work_decisions), created by work-item-store.ts
+    // (schema-v87-work-items.test.ts).
+    expect(db.CURRENT_SCHEMA_VERSION).toBe(87);
   });
 });

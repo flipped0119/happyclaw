@@ -60,6 +60,7 @@ import groupRoutes from './routes/groups.js';
 import memoryRoutes from './routes/memory.js';
 import configRoutes, { injectConfigDeps } from './routes/config.js';
 import type { AutomationWsEvent } from './automation-contract.js';
+import type { WorkItemWsEvent } from './work-items.js';
 import tasksRoutes from './routes/tasks.js';
 import automationRoutes from './routes/automations.js';
 import adminRoutes from './routes/admin.js';
@@ -3956,6 +3957,16 @@ export function broadcastAutomationEvent(event: AutomationWsEvent): void {
       ? { ...event, run: redactAutomationRunForGuest(event.run) }
       : event;
   safeBroadcast(guestEvent, false, new Set(guests));
+}
+
+/**
+ * A work item changed. Only the workspace owner sees team mode; guests get
+ * nothing (their allowlist does not include the work item routes either).
+ */
+export function broadcastWorkItemEvent(event: WorkItemWsEvent): void {
+  const ownerId = getRegisteredGroup(event.workspaceJid)?.created_by;
+  if (!ownerId) return;
+  safeBroadcast(event, false, new Set([ownerId]));
 }
 
 export function broadcastWhatsAppStatus(

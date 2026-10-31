@@ -111,6 +111,10 @@ import {
   initAutomationStore,
   migrateLegacyScheduledTasks,
 } from './automation-store.js';
+import {
+  deleteWorkspaceWorkItems,
+  initWorkItemStore,
+} from './work-item-store.js';
 import { keyPrefixRange } from './sql-key-prefix.js';
 import {
   clearAgentSessionHistoryReinjections,
@@ -2552,6 +2556,10 @@ export function initDatabase(
   bindChannelReliabilityDatabase(db);
   initRuntimeStateStore(db);
   initAutomationStore(db);
+  // v86 -> v87: team mode (团队模式). work-item-store.ts owns its tables
+  // (team_mounts, work_items, work_item_subscriptions, work_item_events,
+  // work_decisions); they are new and additive, nothing is backfilled.
+  initWorkItemStore(db);
 
   // v63 -> v64: early Feishu reply enrichment embedded quoted ancestors in
   // messages.content, leaking prompt scaffolding into Web history and then
@@ -9817,6 +9825,7 @@ export function deleteGroupData(
     // 1. 删除工作区的自动化及其运行记录
     clearFolderRuntimeState(folder, jid);
     deleteWorkspaceAutomations(jid);
+    deleteWorkspaceWorkItems(jid);
     // 2. 删除 workspace -> AgentProfile 归属映射
     prepareCached(
       'DELETE FROM workspace_agent_profiles WHERE group_folder = ?',
@@ -13255,6 +13264,7 @@ export function closeDatabase(): void {
   bindOwnerProfileDatabase(null);
   initRuntimeStateStore(null);
   initAutomationStore(null);
+  initWorkItemStore(null);
   if (db) {
     db.close();
   }

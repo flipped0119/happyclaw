@@ -71,3 +71,12 @@ sync_file "$ROOT/shared/model-providers.ts" "$ROOT/web/src/lib/model-providers.t
 sync_file "$ROOT/shared/automation.ts" "$ROOT/src/automation.ts"
 sync_file "$ROOT/shared/automation.ts" "$ROOT/web/src/lib/automation.ts"
 sync_file "$ROOT/shared/automation.ts" "$ROOT/container/agent-runner/src/automation.ts"
+
+# --- Team mode shapes (3 targets: backend, web and agent-runner) ---
+for target in \
+  "$ROOT/src/work-items.ts" \
+  "$ROOT/web/src/work-items.ts" \
+  "$ROOT/container/agent-runner/src/work-items.ts" \
+; do
+  sync_file "$ROOT/shared/work-items.ts" "$target"
+done
