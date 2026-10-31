@@ -182,3 +182,62 @@ describe('explicit channel binding routes', () => {
     expect(f.createTopic).not.toHaveBeenCalled();
   });
 });
+
+describe('team mode routes', () => {
+  const mount = {
+    channel_jid: 'feishu:oc_team',
+    channel_type: 'feishu',
+    workspace_jid: 'web:workspace',
+    session_id: null,
+    routing_mode: 'single_session' as const,
+    reply_policy: 'source_only' as const,
+    activation_mode: 'when_mentioned' as const,
+    audience_mode: 'everyone' as const,
+    created_at: '2026-11-01',
+    updated_at: '2026-11-01',
+  };
+  const message = {
+    provider: 'feishu' as const,
+    chatType: 'group' as const,
+    messageId: 'om_1',
+  };
+
+  function teamFixture(
+    teamRoute: ChannelInboundRoutingDeps['resolveTeamRoute'],
+  ) {
+    const f = fixture();
+    f.bind('feishu:oc_team', { target_main_jid: 'web:workspace' });
+    return createChannelInboundRouter({
+      ...f.deps,
+      getChannelMount: (jid) => (jid === mount.channel_jid ? mount : undefined),
+      resolveTeamRoute: teamRoute,
+    });
+  }
+
+  test('the lane the team decision chose wins over the main session', () => {
+    const resolveTeamRoute = vi.fn(() => ({
+      effectiveJid: 'web:workspace#agent:router-1',
+      agentId: 'router-1',
+    }));
+    expect(teamFixture(resolveTeamRoute)('feishu:oc_team', message)).toEqual({
+      effectiveJid: 'web:workspace#agent:router-1',
+      agentId: 'router-1',
+    });
+    expect(resolveTeamRoute).toHaveBeenCalledWith(
+      'feishu:oc_team',
+      mount,
+      message,
+    );
+  });
+
+  test('without a team decision the route is unchanged', () => {
+    expect(teamFixture(() => null)('feishu:oc_team', message)).toEqual({
+      effectiveJid: 'web:workspace',
+      agentId: null,
+    });
+    expect(teamFixture(undefined)('feishu:oc_team', message)).toEqual({
+      effectiveJid: 'web:workspace',
+      agentId: null,
+    });
+  });
+});
