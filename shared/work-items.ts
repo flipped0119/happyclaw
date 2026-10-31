@@ -190,7 +190,22 @@ export type WorkReportState =
   | 'failed'
   | 'dropped';
 
+/** Every report state, in the order tools list them. */
+export const WORK_REPORT_STATES = [
+  'progress',
+  'waiting',
+  'ready',
+  'blocked',
+  'failed',
+  'dropped',
+] as const satisfies readonly WorkReportState[];
+
 export type WorkItemStatus = 'open' | 'ended';
+
+/** A work item's title, in characters. */
+export const WORK_TITLE_CHAR_LIMIT = 60;
+/** A routing note, in `countImWords` words. */
+export const WORK_NOTE_WORD_LIMIT = 30;
 
 /** How an ended item ended. */
 export type WorkItemOutcome =
@@ -229,6 +244,13 @@ export interface WorkItem {
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
+}
+
+/** Whether the item's worker may change files: its mandate, or an approval. */
+export function isWorkItemWritable(
+  item: Pick<WorkItem, 'mandate' | 'approvedAt'>,
+): boolean {
+  return item.mandate.writable || item.approvedAt !== null;
 }
 
 /**
@@ -376,6 +398,36 @@ export interface WorkRouteResultItem {
   error?: string;
   workItemId?: string;
   decision?: WorkDecisionKind;
+}
+
+/**
+ * What a team session may not do, one list for both sides: the Runner does
+ * not register these tools and the host refuses their IPC requests. A team
+ * session reaches people only through its work tools.
+ */
+export const TEAM_LANE_POLICY = {
+  withheldTools: [
+    'send_message',
+    'send_image',
+    'send_file',
+    'feishu_send_card',
+    'feishu_api_request',
+    'schedule_task',
+    'install_skill',
+    'uninstall_skill',
+  ],
+  withheldToolPrefixes: ['automation_'],
+  /** `feishu_capability` operations a team session may still run. */
+  feishuReadOperations: ['get_chat', 'list_members', 'get_user', 'get_history'],
+} as const;
+
+export function teamLaneWithholdsTool(name: string): boolean {
+  return (
+    (TEAM_LANE_POLICY.withheldTools as readonly string[]).includes(name) ||
+    TEAM_LANE_POLICY.withheldToolPrefixes.some((prefix) =>
+      name.startsWith(prefix),
+    )
+  );
 }
 
 export const WORK_IPC_TYPES = [
