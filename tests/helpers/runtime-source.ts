@@ -112,7 +112,6 @@ function automationDefaults(): Record<string, unknown> {
     resolveTeamRole: () => null,
     // processAgentConversation's own: extracted callbacks close over it.
     teamRole: null,
-    teamRoleKey: () => null,
     resolveTeamRoute: () => null,
     afterTeamMessageStored: () => {},
     followupCopyIdsOf: () => [],

@@ -48,6 +48,7 @@ let replySeq = 0;
 const replies: runtime.TeamReplyRequest[] = [];
 const laneMessages: { laneJid: string; text: string; id: string }[] = [];
 const stopped: string[] = [];
+const drained: string[] = [];
 const broadcasts: string[] = [];
 let failReplies = false;
 let replyRetryable = false;
@@ -58,6 +59,7 @@ function installHooks(): void {
     wake: vi.fn(),
     broadcastNewMessage: vi.fn(),
     stopLane: (laneJid) => stopped.push(laneJid),
+    drainLane: (laneJid) => drained.push(laneJid),
     postReply: async (request) => {
       replies.push(request);
       if (failReplies) {
@@ -632,6 +634,8 @@ describe('work reports and approval', () => {
 
     const approved = await service.approveWorkItem(item.id, ACTOR);
     expect(approved.approvedAt).toBeTruthy();
+    // Its read-only warm runner is retired before the approval arrives.
+    expect(drained).toContain(`${WORKSPACE}#agent:${item.agentId}`);
     expect(service.resolveTeamRole(item.agentId)).toMatchObject({
       writable: true,
     });

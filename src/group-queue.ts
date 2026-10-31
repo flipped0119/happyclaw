@@ -56,12 +56,6 @@ export interface RunnerMessageRequirements {
   feishuCliAccountId?: string | null;
   /** Delivery contract fixed in the runner system prompt and MCP tools. */
   interactionMode?: InteractionMode;
-  /**
-   * Team-mode role the runner was started with (role, work item and whether
-   * it may edit), fixed in its tools and prompt. Compared only when given:
-   * null names a lane without a team role.
-   */
-  teamRoleKey?: string | null;
 }
 
 interface FeishuCliIdentityRequirement {
@@ -236,8 +230,6 @@ interface GroupState {
   feishuCliAccountId: string | null;
   /** Main runner contract; null for task/legacy runners. */
   interactionMode: InteractionMode | null;
-  /** Team-mode role the runner started with; null for any other lane. */
-  teamRoleKey: string | null;
   /** True when a _drain sentinel has been written for the current active runner. */
   drainSentinelWritten: boolean;
   /** True when messages have been IPC-injected into the running agent via sendMessage().
@@ -398,7 +390,6 @@ export class GroupQueue {
         selectedProviderId: null,
         feishuCliAccountId: null,
         interactionMode: null,
-        teamRoleKey: null,
         drainSentinelWritten: false,
         hasIpcInjectedMessages: false,
         ipcOwedSinceAt: null,
@@ -1299,6 +1290,19 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Retire the runner serving `groupJid` once its current query ends (an
+   * idle one now). Until it has exited, no new turn is piped into it: the
+   * next input starts a fresh runner. For a change the runner was started
+   * without, such as an approved work item's restored edit tools.
+   */
+  retireRunnerAfterQuery(groupJid: string): boolean {
+    const runner = this.findActiveRunnerFor(groupJid);
+    if (!runner) return false;
+    this.closeAfterQuery(runner, () => {});
+    return true;
+  }
+
   /** Close `runnerJid` after its current query; idle runners close now. */
   private closeAfterQuery(
     runnerJid: string,
@@ -2014,7 +2018,6 @@ export class GroupQueue {
       selectedProviderId?: string | null;
       feishuCliAccountId?: string | null;
       interactionMode?: InteractionMode;
-      teamRoleKey?: string | null;
       onDeferredInterruptFailure?: (queryId: string) => void;
     },
   ): void {
@@ -2028,7 +2031,6 @@ export class GroupQueue {
     state.selectedProviderId = opts.selectedProviderId ?? null;
     state.feishuCliAccountId = opts.feishuCliAccountId ?? null;
     state.interactionMode = opts.interactionMode ?? null;
-    state.teamRoleKey = opts.teamRoleKey ?? null;
     state.deferredInterruptFailure = opts.onDeferredInterruptFailure;
     const pendingInterruptQueryId = state.pendingInterruptQueryId;
     if (
@@ -2161,25 +2163,6 @@ export class GroupQueue {
           requiredInteractionMode: requirements.interactionMode,
         },
         'Rejected warm IPC injection across interaction modes',
-      );
-      return 'no_active';
-    }
-
-    if (
-      requirements?.teamRoleKey !== undefined &&
-      state.teamRoleKey !== requirements.teamRoleKey
-    ) {
-      this.requestDrainForActiveRunner(
-        groupJid,
-        'Draining runner before switching team role',
-      );
-      logger.info(
-        {
-          groupJid,
-          activeTeamRole: state.teamRoleKey,
-          requiredTeamRole: requirements.teamRoleKey,
-        },
-        'Rejected warm IPC injection across team roles',
       );
       return 'no_active';
     }
@@ -3203,7 +3186,6 @@ export class GroupQueue {
       state.agentId = null;
       state.runnerRuntime = null;
       state.interactionMode = null;
-      state.teamRoleKey = null;
       state.deferredInterruptFailure = undefined;
       this.activeCount--;
       if (isHostMode) {
@@ -3381,7 +3363,6 @@ export class GroupQueue {
       state.agentId = null;
       state.runnerRuntime = null;
       state.interactionMode = null;
-      state.teamRoleKey = null;
       state.deferredInterruptFailure = undefined;
       this.activeCount--;
       if (isHostMode) {

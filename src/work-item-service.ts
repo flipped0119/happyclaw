@@ -273,14 +273,6 @@ export function resolveTeamRole(
   return null;
 }
 
-/** The warm-runner identity of a team role (see RunnerMessageRequirements). */
-export function teamRoleKey(role: TeamRole | null): string | null {
-  if (!role) return null;
-  return role.role === 'router'
-    ? 'router'
-    : `worker:${role.workItemId}:${role.writable ? 'rw' : 'ro'}`;
-}
-
 // ── Views and broadcast ────────────────────────────────────────────────
 
 function toView(item: WorkItem): WorkItemView {
@@ -706,8 +698,12 @@ export async function approveWorkItem(
   }
   const approved = patchItem(item, { approvedAt: now() });
   recordWorkEvent({ workItemId: item.id, kind: 'approve', now: now() });
-  // The worker's role changes with this (writable), so its next turn starts
-  // on a fresh runner with the edit tools restored.
+  // The worker's role changes with this (writable): its warm runner, started
+  // without the edit tools, finishes its turn and the approval starts a
+  // fresh one with them restored.
+  getWorkItemRuntimeHooks().drainLane(
+    laneJidOf(item.workspaceJid, item.agentId),
+  );
   injectTeamInput({
     workspaceJid: item.workspaceJid,
     agentId: item.agentId,

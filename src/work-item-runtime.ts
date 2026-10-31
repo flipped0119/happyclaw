@@ -67,6 +67,8 @@ export interface WorkItemRuntimeHooks {
   /** Start processing an idle Runtime Session. */
   wake(workspaceJid: string, agentId: string): void;
   broadcastNewMessage(laneJid: string, message: NewMessage): void;
+  /** Retire a lane's warm runner after its current turn. */
+  drainLane(laneJid: string): void;
   /**
    * Stop a lane like `/break`: withdraw the inputs it has not run yet and
    * interrupt the turn it runs now. The lane stays usable.

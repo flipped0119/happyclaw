@@ -635,7 +635,6 @@ import {
   teamGateDeps,
   teamInputItemFor,
   teamIpcRefusal,
-  teamRoleKey,
   type TeamGroupContext,
 } from './work-item-service.js';
 import {
@@ -1836,9 +1835,6 @@ function injectPreparedFollowUp(
               ...feishuCliRequirement,
               ...(interactionBatch
                 ? { interactionMode: interactionBatch.interactionMode }
-                : {}),
-              ...(queuedTeamRole
-                ? { teamRoleKey: teamRoleKey(queuedTeamRole) }
                 : {}),
             }
           : undefined,
@@ -15649,8 +15645,6 @@ async function processAgentConversation(
     }
     return;
   }
-  // Fixed for this runner: a changed role (or an approved worker) never
-  // reuses it (see RunnerMessageRequirements.teamRoleKey).
   const teamRole = resolveTeamRole(agentId);
   const interactionBatch = selectRuntimeInteractionBatch(
     missedMessages,
@@ -18569,7 +18563,6 @@ async function processAgentConversation(
         selectedProviderId,
         feishuCliAccountId,
         interactionMode,
-        teamRoleKey: teamRoleKey(teamRole),
         onDeferredInterruptFailure: () => {
           clearSteeringInterrupt(virtualJid);
           dispatchQueuedFollowUpFamily(virtualJid);
@@ -21211,8 +21204,6 @@ function buildOnAgentMessage(): (baseChatJid: string, agentId: string) => void {
           {
             feishuCliAccountId: requiredFeishuCliAccountId,
             interactionMode: requiredInteractionMode,
-            // Compared only for team lanes; every other lane is unchanged.
-            ...(warmTeamRole ? { teamRoleKey: teamRoleKey(warmTeamRole) } : {}),
           },
         )
       : 'no_active';
@@ -23912,6 +23903,11 @@ async function main(): Promise<void> {
       buildOnAgentMessage()(workspaceJid, agentId),
     broadcastNewMessage: (laneJid, message) =>
       broadcastNewMessage(laneJid, message),
+    // An approved worker's warm runner still has the read-only tool set:
+    // it takes no new turn, and the approval starts a fresh one.
+    drainLane: (laneJid) => {
+      queue.retireRunnerAfterQuery(laneJid);
+    },
     stopLane: (laneJid) => {
       breakLane(laneJid, 'Input cancelled: work item stopped');
     },
