@@ -51,6 +51,7 @@ async function startRunner(
     containerName?: string | null;
     feishuCliAccountId?: string | null;
     interactionMode?: 'assistant' | 'proactive';
+    teamRoleKey?: string | null;
   } = {},
 ): Promise<void> {
   queue.enqueueMessageCheck(JID);
@@ -69,6 +70,7 @@ async function startRunner(
       groupFolder: FOLDER,
       feishuCliAccountId: options.feishuCliAccountId,
       interactionMode: options.interactionMode,
+      teamRoleKey: options.teamRoleKey,
     },
   );
 }
@@ -146,6 +148,63 @@ describe('GroupQueue IPC delivery receipts', () => {
     ).toBe('no_active');
     expect(readPayloads()).toEqual([]);
     expect(fs.existsSync(path.join(inputDir(), '_drain'))).toBe(true);
+  });
+
+  test('drains a warm runner before injecting another team role', async () => {
+    await startRunner({ teamRoleKey: 'worker:w1:ro' });
+    const send = (teamRoleKey: string | null) =>
+      queue.sendMessage(
+        JID,
+        'approved',
+        undefined,
+        undefined,
+        JID,
+        undefined,
+        undefined,
+        undefined,
+        { teamRoleKey },
+      );
+    expect(send('worker:w1:rw')).toBe('no_active');
+    expect(readPayloads()).toEqual([]);
+    expect(fs.existsSync(path.join(inputDir(), '_drain'))).toBe(true);
+  });
+
+  test('a lane without a team role keeps its warm runner', async () => {
+    await startRunner();
+    const send = (requirements?: { teamRoleKey?: string | null }) =>
+      queue.sendMessage(
+        JID,
+        'hello',
+        undefined,
+        undefined,
+        JID,
+        undefined,
+        undefined,
+        undefined,
+        requirements,
+      );
+    // Unspecified and an explicit null both match a runner started without one.
+    expect(send()).toBe('sent');
+    expect(send({ teamRoleKey: null })).toBe('sent');
+    expect(readPayloads()).toHaveLength(2);
+    expect(fs.existsSync(path.join(inputDir(), '_drain'))).toBe(false);
+  });
+
+  test('the same team role reuses the warm runner', async () => {
+    await startRunner({ teamRoleKey: 'router' });
+    expect(
+      queue.sendMessage(
+        JID,
+        'candidate',
+        undefined,
+        undefined,
+        JID,
+        undefined,
+        undefined,
+        undefined,
+        { teamRoleKey: 'router' },
+      ),
+    ).toBe('sent');
   });
 
   test('accepts a warm scheduled prompt with the runner frozen mode', async () => {

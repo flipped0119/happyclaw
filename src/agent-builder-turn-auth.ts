@@ -222,6 +222,22 @@ export function isAutomationTurnInput(
   );
 }
 
+/**
+ * An input no person typed in this turn: an automation run's, or one the host
+ * composed for a team-mode session (assignment, follow-up copy, report). It
+ * never counts as the owner speaking, so Skill changes are refused and
+ * Workspace Memory writes become proposals.
+ */
+export function isUnattendedTurnInput(
+  turn: Pick<AgentBuilderTurnContext, 'automationRunId'>,
+  input: Pick<AgentBuilderPersistedInput, 'source_kind' | 'automation_run_id'>,
+): boolean {
+  return (
+    isAutomationTurnInput(turn, input) ||
+    input.source_kind === 'work_item_input'
+  );
+}
+
 export function isAgentBuilderOwnerInput(
   input: Pick<AgentBuilderPersistedInput, 'sender' | 'source_jid'>,
   ownerUserId: string,
@@ -445,7 +461,7 @@ export class AgentBuilderTurnRegistry {
     }));
     if (observed.some(({ input }) => !input)) return 'unknown';
     if (
-      observed.some(({ turn, input }) => isAutomationTurnInput(turn, input!))
+      observed.some(({ turn, input }) => isUnattendedTurnInput(turn, input!))
     ) {
       return 'automation';
     }
@@ -478,7 +494,7 @@ export class AgentBuilderTurnRegistry {
       if (
         !input ||
         input.is_from_me !== 0 ||
-        isAutomationTurnInput(turn, input)
+        isUnattendedTurnInput(turn, input)
       ) {
         throw new Error(
           'Agent Builder is unavailable for automation or non-human turns',
@@ -529,7 +545,7 @@ export class AgentBuilderTurnRegistry {
       if (
         !input ||
         input.is_from_me !== 0 ||
-        isAutomationTurnInput(turn, input)
+        isUnattendedTurnInput(turn, input)
       ) {
         throw new Error(
           'Owner Profile is unavailable for automation or non-human turns',
@@ -581,7 +597,7 @@ export class AgentBuilderTurnRegistry {
       if (
         !input ||
         input.is_from_me !== 0 ||
-        isAutomationTurnInput(turn, input) ||
+        isUnattendedTurnInput(turn, input) ||
         !isOwnerInput(input)
       ) {
         throw new Error(

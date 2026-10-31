@@ -44,6 +44,8 @@ export interface MentionGateInput {
   conversationPlan?: {
     disabled: boolean;
     allowWithoutMention: boolean;
+    /** Team mode decided the message: it replaces the @ requirement. */
+    team?: { outcome: 'subscribed' | 'candidate' | 'ignore' };
   };
   /**
    * 来自 happyclaw 主进程：根据该群 activation_mode / require_mention
@@ -70,7 +72,9 @@ export type MentionGateRejectReason =
   /** 该群配置要求 @bot 但本条消息没 @ */
   | 'not_mentioned'
   /** owner_mentioned 模式下 bot 被 @ 了但 sender 不是 owner */
-  | 'not_owner';
+  | 'not_owner'
+  /** Team mode admitted it nowhere: no work item, not a candidate. */
+  | 'team_ignored';
 
 export type MentionGateDecision =
   | { allow: true }
@@ -133,6 +137,14 @@ export function evaluateMentionGate(
 ): MentionGateDecision {
   if (input.conversationPlan?.disabled) {
     return { allow: false, reason: 'disabled' };
+  }
+  // Team mode replaces the @ gate for group messages: a subscribed thread
+  // needs no @, a candidate was admitted by the team's own table.
+  const team = input.conversationPlan?.team;
+  if (team && input.chatType === 'group') {
+    return team.outcome === 'ignore'
+      ? { allow: false, reason: 'team_ignored' }
+      : ALLOW;
   }
   if (
     input.chatType !== 'group' ||

@@ -5,6 +5,10 @@ import {
   type TurnMessageDeliveryRole,
 } from './turn-output-coordinator.js';
 
+/** What a team-mode session is told when it tries to message a chat itself. */
+export const TEAM_SESSION_IM_REFUSAL =
+  'Team-mode sessions do not message chats directly. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';
+
 /**
  * What the Agent is told when an IM turn's progress is rejected for want of a
  * route: nothing was sent, and sending it again cannot help.
@@ -40,6 +44,11 @@ export interface HostIpcOutputRouteInput {
   turnSource?: 'web' | 'im';
   /** An IM turn's own reply route is open (its outbox scope is bound). */
   imRouteAvailable?: boolean;
+  /**
+   * The caller is a team-mode router or worker session. Its only IM output
+   * is the host's own team replies (work_reply, work_ack).
+   */
+  teamSession?: boolean;
 }
 
 /**
@@ -94,7 +103,11 @@ export type HostIpcOutputRoute =
       delivered: false;
       staged: false;
       deliveryRole: TurnMessageDeliveryRole | null;
-      reason: 'unauthorized' | 'conflicting_final' | 'native_route_unavailable';
+      reason:
+        | 'unauthorized'
+        | 'conflicting_final'
+        | 'native_route_unavailable'
+        | 'team_session';
     };
 
 function normalizeDeliveryRole(value: unknown): TurnMessageDeliveryRole | null {
@@ -126,6 +139,15 @@ export function routeHostIpcOutput(
   activeTurnOutputs: ActiveTurnOutputRegistry,
 ): HostIpcOutputRoute {
   const deliveryRole = normalizeDeliveryRole(input.deliveryRole);
+  if (input.teamSession) {
+    return {
+      path: 'rejected',
+      delivered: false,
+      staged: false,
+      deliveryRole,
+      reason: 'team_session',
+    };
+  }
   if (!input.authorized) {
     return {
       path: 'rejected',

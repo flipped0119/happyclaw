@@ -23,6 +23,15 @@ export interface FeishuConversationPolicyInput {
   activeContext?: ActiveFeishuContext;
 }
 
+export interface FeishuTeamPlan {
+  outcome: 'subscribed' | 'candidate' | 'ignore';
+  /**
+   * The hidden header item the stored message carries (see team-gate.ts),
+   * as an attachments-JSON entry. Absent for `ignore`.
+   */
+  inputItem?: unknown;
+}
+
 export interface FeishuConversationPlan {
   /** A hard stop that cannot be bypassed by mentioning the bot. */
   disabled: boolean;
@@ -34,6 +43,12 @@ export interface FeishuConversationPlan {
   contextId?: string;
   /** Topic root used as the reply_in_thread anchor of an independent context. */
   rootMessageId?: string;
+  /**
+   * Team mode (团队模式) decided where this group message goes. `subscribed`
+   * and `candidate` pass the @ gate (the decision replaces it); `ignore` is
+   * dropped like a message that failed activation. Absent outside team mode.
+   */
+  team?: FeishuTeamPlan;
   reason:
     | 'disabled'
     | 'direct'
