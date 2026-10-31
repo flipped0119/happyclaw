@@ -2,11 +2,13 @@ import {
   Loader2,
   MessageSquare,
   Users,
+  UsersRound,
   ArrowRightLeft,
   RotateCcw,
   AlertTriangle,
   Trash2,
 } from 'lucide-react';
+import { teamModeWorkspaceOf } from '../../lib/team-mode';
 import { Button } from '@/components/ui/button';
 import {
   NativeSelect,
@@ -34,6 +36,8 @@ interface ImBindingRowProps {
   onActivationModeChange: (jid: string, mode: string) => void;
   onAudienceModeChange: (jid: string, mode: 'everyone' | 'owner_only') => void;
   onDelete: (group: AvailableImGroup) => void;
+  /** Feishu ordinary groups bound to a main session. */
+  onTeamMode?: (group: AvailableImGroup, workspaceJid: string) => void;
 }
 
 export function ImBindingRow({
@@ -45,6 +49,7 @@ export function ImBindingRow({
   onActivationModeChange,
   onAudienceModeChange,
   onDelete,
+  onTeamMode,
 }: ImBindingRowProps) {
   const boundSessionId = group.bound_session_id ?? group.bound_agent_id;
   const boundWorkspaceJid = group.bound_workspace_jid ?? group.bound_main_jid;
@@ -86,6 +91,8 @@ export function ImBindingRow({
     }
     return '未绑定';
   };
+
+  const teamWorkspaceJid = policyMismatch ? null : teamModeWorkspaceOf(group);
 
   const showAudience =
     group.channel_type === 'feishu' &&
@@ -193,6 +200,15 @@ export function ImBindingRow({
                   <RotateCcw className="size-3.5" />
                 )
               }
+            />
+          )}
+          {onTeamMode && teamWorkspaceJid && (
+            <IconButton
+              label="团队模式"
+              onClick={() => onTeamMode(group, teamWorkspaceJid)}
+              disabled={isActioning}
+              className="text-muted-foreground"
+              icon={<UsersRound className="size-3.5" />}
             />
           )}
           <Button

@@ -93,6 +93,11 @@ const AutomationsPage = lazy(() =>
     default: m.AutomationsPage,
   })),
 );
+const WorkItemsPage = lazy(() =>
+  import('./pages/WorkItemsPage').then((m) => ({
+    default: m.WorkItemsPage,
+  })),
+);
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
@@ -246,6 +251,14 @@ const appRoutes = createRoutesFromElements(
         }
       />
       <Route path="/tasks" element={<Navigate to="/automations" replace />} />
+      <Route
+        path="/work/:itemId?"
+        element={
+          <Suspense fallback={null}>
+            <WorkItemsPage />
+          </Suspense>
+        }
+      />
       <Route
         path="/monitor"
         element={

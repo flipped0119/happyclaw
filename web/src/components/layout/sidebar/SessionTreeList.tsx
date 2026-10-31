@@ -3,6 +3,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { ChevronRight, Link2, Play, Search, Timer, Trash2 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { TeamSessionTag } from '../../team/TeamSessionTag';
 import { useShellStore } from '../../../stores/shell';
 import { useAutomationsStore } from '../../../stores/automations';
 import { useIsGuest } from '../../../stores/auth';
@@ -137,6 +138,7 @@ export const SessionTreeList = memo(function SessionTreeList({
         linked={(session.linked_im_groups?.length ?? 0) > 0}
         worktree={session.worktree}
         automations={boundTo(session)}
+        tag={<TeamSessionTag workspaceJid={group.jid} session={session} />}
         time={formatSessionTime(sessionActivityAt(session))}
         onSelect={() => openWorkspaceSession(navigate, group, session.id)}
         onDelete={
@@ -368,6 +370,7 @@ function SessionRow({
   linked = false,
   worktree,
   automations = NO_AUTOMATIONS,
+  tag,
   time,
   onSelect,
   onDelete,
@@ -384,6 +387,8 @@ function SessionRow({
   worktree?: SessionWorktreeInfo | null;
   /** Automations bound to this session, shown as a timer mark. */
   automations?: Automation[];
+  /** Team mode's 团队路由 / #N 工作项 tag. */
+  tag?: React.ReactNode;
   time?: string;
   onSelect: () => void;
   /** Shown next to the menu on hover; the handler asks for confirmation. */
@@ -419,6 +424,7 @@ function SessionRow({
           />
         )}
       </button>
+      {tag}
       <BoundAutomationMark automations={automations} />
       {running || titleGenerating ? (
         <Spinner

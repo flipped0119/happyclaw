@@ -25,6 +25,7 @@ import { CommandPaletteHost } from '../command/CommandPaletteHost';
 import { useGlobalStreamSubscriptions } from '../../hooks/useStreamSubscriptions';
 import { useUsageLimitWaitSubscription } from '../../stores/usage-limit-waits';
 import { useAutomationSubscription } from '../../stores/automations';
+import { useWorkItemSubscription } from '../../stores/work-items';
 import { AutomationFormHost } from '../automations/AutomationFormHost';
 import { CreateWorkspaceHost } from './CreateWorkspaceHost';
 import { syncAppBadge } from '../../utils/appBadge';
@@ -136,6 +137,8 @@ export function AppLayout() {
   useUsageLimitWaitSubscription();
   // Automations feed the sidebar tree and the chat header, not only their page.
   useAutomationSubscription();
+  // Team mode: work items change from the group and the workers.
+  useWorkItemSubscription();
 
   // Message deletion is a durable server mutation. Apply it globally so a
   // second tab/device cannot retain a deleted main or Runtime Session bubble.

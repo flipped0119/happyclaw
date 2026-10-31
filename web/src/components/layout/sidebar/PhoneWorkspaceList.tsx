@@ -14,6 +14,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { ChevronRight, Folder, Link2, Pin, Timer } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { TeamSessionTag } from '../../team/TeamSessionTag';
 import { useChatStore } from '../../../stores/chat';
 import { useAuthStore } from '../../../stores/auth';
 import { useGroupsStore } from '../../../stores/groups';
@@ -402,6 +403,7 @@ function WorkspaceSessions({
         linked={(session.linked_im_groups?.length ?? 0) > 0}
         worktree={session.worktree}
         automations={boundTo(session)}
+        tag={<TeamSessionTag workspaceJid={group.jid} session={session} />}
         onOpen={() => open(session.id)}
         menu={
           canModify && !isNativeManagedSession(session)
@@ -490,6 +492,7 @@ function PhoneSessionRow({
   linked = false,
   worktree,
   automations = NO_AUTOMATIONS,
+  tag,
   onOpen,
   menu,
 }: {
@@ -502,6 +505,8 @@ function PhoneSessionRow({
   worktree?: SessionWorktreeInfo | null;
   /** Automations bound to this session, shown as a timer mark. */
   automations?: Automation[];
+  /** Team mode's 团队路由 / #N 工作项 tag. */
+  tag?: React.ReactNode;
   onOpen: () => void;
   menu?: MenuAction[][];
 }) {
@@ -545,6 +550,7 @@ function PhoneSessionRow({
               aria-label="已绑定消息渠道"
             />
           )}
+          {tag}
           <BoundAutomationMark
             automations={automations}
             className="[&_svg]:size-3.5"
