@@ -48,6 +48,7 @@ import type {
   ChannelMount,
   ChannelTurnContext,
   RegisteredGroup,
+  SubAgent,
 } from './types.js';
 import {
   getTeamMount,
@@ -255,25 +256,35 @@ export function hasWorkerSession(item: WorkItem): boolean {
   return agent?.kind === 'conversation' && agent.chat_jid === item.workspaceJid;
 }
 
-/** The role a Runtime Session plays in team mode, or null for none. */
+/**
+ * The role a Runtime Session plays in team mode, or null for none, from the
+ * agent row the caller already holds: any other session stops at its
+ * source_kind, without a lookup.
+ */
+export function teamLaneOf(
+  agent: Pick<SubAgent, 'id' | 'source_kind'> | undefined,
+): TeamRole | null {
+  if (agent?.source_kind === 'team_router') {
+    return getTeamMountByRouter(agent.id) ? { role: 'router' } : null;
+  }
+  if (agent?.source_kind === 'work_item') {
+    const item = getWorkItemByAgent(agent.id);
+    return item
+      ? {
+          role: 'worker',
+          workItemId: item.id,
+          writable: isWorkItemWritable(item),
+        }
+      : null;
+  }
+  return null;
+}
+
+/** {@link teamLaneOf} for a session known by id. */
 export function resolveTeamRole(
   agentId: string | null | undefined,
 ): TeamRole | null {
-  if (!agentId) return null;
-  const agent = getAgent(agentId);
-  if (agent?.source_kind === 'team_router') {
-    return getTeamMountByRouter(agentId) ? { role: 'router' } : null;
-  }
-  if (agent?.source_kind === 'work_item') {
-    const item = getWorkItemByAgent(agentId);
-    if (!item) return null;
-    return {
-      role: 'worker',
-      workItemId: item.id,
-      writable: isWorkItemWritable(item),
-    };
-  }
-  return null;
+  return agentId ? teamLaneOf(getAgent(agentId)) : null;
 }
 
 // ── Views and broadcast ────────────────────────────────────────────────
@@ -1088,15 +1099,18 @@ function scheduleReply(id: string, delayMs: number): void {
   replyTimers.set(id, { timer, dueAt: Date.now() + delayMs });
 }
 
+function cancelReplyTimer(id: string): void {
+  const waiting = replyTimers.get(id);
+  if (!waiting) return;
+  clearTimeout(waiting.timer);
+  replyTimers.delete(id);
+}
+
 /** Send every reply still owed, after a restart. Ids only are logged. */
 export function resumePendingTeamReplies(): void {
   const pending = listPendingWorkItemReplies();
   for (const reply of pending) {
-    const waiting = replyTimers.get(reply.id);
-    if (waiting) {
-      clearTimeout(waiting.timer);
-      replyTimers.delete(reply.id);
-    }
+    cancelReplyTimer(reply.id);
     scheduleReply(reply.id, 0);
   }
   if (pending.length > 0) {
@@ -1115,8 +1129,7 @@ export async function settleTeamReplies(): Promise<void> {
   for (let round = 0; round < 50; round++) {
     for (const [id, waiting] of replyTimers) {
       if (waiting.dueAt > Date.now()) continue;
-      clearTimeout(waiting.timer);
-      replyTimers.delete(id);
+      cancelReplyTimer(id);
       void sendReply(id);
     }
     await new Promise((resolve) => setImmediate(resolve));
@@ -1175,11 +1188,7 @@ async function sendReply(id: string): Promise<void> {
 
 /** A reply that must not go out any more; no question for anyone. */
 function voidReply(reply: WorkItemReply, reason: string): void {
-  const waiting = replyTimers.get(reply.id);
-  if (waiting) {
-    clearTimeout(waiting.timer);
-    replyTimers.delete(reply.id);
-  }
+  cancelReplyTimer(reply.id);
   updateWorkItemReply(reply.id, { status: 'failed', error: reason }, now());
   logger.info(
     { replyId: reply.id, workItemId: reply.workItemId, reason },

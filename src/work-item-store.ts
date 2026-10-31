@@ -71,6 +71,8 @@ export function initWorkItemStore(db: SqliteDatabase | null): void {
     );
     CREATE INDEX IF NOT EXISTS idx_team_mounts_workspace
       ON team_mounts(workspace_jid);
+    CREATE INDEX IF NOT EXISTS idx_team_mounts_router
+      ON team_mounts(router_agent_id);
 
     CREATE TABLE IF NOT EXISTS work_items (
       id TEXT PRIMARY KEY,

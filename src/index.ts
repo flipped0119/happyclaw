@@ -631,6 +631,7 @@ import {
   resolveTeamGroup,
   resolveTeamRole,
   resumePendingTeamReplies,
+  teamLaneOf,
   teamGateDeps,
   teamInputItemFor,
   teamIpcRefusal,
@@ -15644,7 +15645,7 @@ async function processAgentConversation(
     }
     return;
   }
-  const teamRole = resolveTeamRole(agentId);
+  const teamRole = teamLaneOf(agent);
   const interactionBatch = selectRuntimeInteractionBatch(
     missedMessages,
     effectiveGroup,
@@ -21108,7 +21109,7 @@ function buildOnAgentMessage(): (baseChatJid: string, agentId: string) => void {
       getMessagesSince(virtualChatJid, sinceCursor),
     );
     const { effectiveGroup } = resolveEffectiveGroup(group);
-    const warmTeamRole = resolveTeamRole(agentId);
+    const warmTeamRole = teamLaneOf(agent);
     const interactionBatch = selectRuntimeInteractionBatch(
       allPendingMessages,
       effectiveGroup,
