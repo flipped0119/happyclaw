@@ -225,6 +225,7 @@ import {
   updateAgentContextInfo,
   backfillEmptyAllowlistsForChannelAccount,
   getChannelMount,
+  setChannelMountChangeListener,
   migrateAgentProfileAutoCompactWindow,
   getChannelAccount,
   listChannelAccountsForUser,
@@ -627,7 +628,9 @@ import {
   isWorkIpcType,
   mayRunTeamMode,
   onTeamMessageStored,
+  teamRouteStillHolds,
   reconcileAllTeamGroups,
+  reconcileTeamGroup,
   resolveTeamGroup,
   resolveTeamRole,
   resumePendingTeamReplies,
@@ -1949,8 +1952,12 @@ function queuedInputImSender(
   const sourceJid = item.source_jid;
   const provider = sourceJid ? getChannelType(sourceJid) : null;
   if (!sourceJid || !provider) return null;
+  // A team input the host composed from a group message (a follow-up copy,
+  // a hand-back) is that person's message: its own sender is the host.
   const imId =
-    ownerImIdFromPersistedSender(sourceJid, item.sender) ?? undefined;
+    item.source_kind === 'work_item_input'
+      ? readTeamInput(item.attachments)?.facts?.senderImId
+      : (ownerImIdFromPersistedSender(sourceJid, item.sender) ?? undefined);
   if (item.channel_context) {
     return item.channel_context.provider === provider ? { imId } : null;
   }
@@ -20864,7 +20871,11 @@ function resolveTeamRoute(
   chatJid: string,
   meta: ChannelMessageMeta | undefined,
 ): { effectiveJid: string; agentId: string } | 'reject' | null {
-  if (meta?.teamRoute) return meta.teamRoute;
+  // The plan was made before the connector's sender-name lookup: team mode,
+  // the router or the first item may have changed since. Decide again then.
+  if (meta?.teamRoute && teamRouteStillHolds(chatJid, meta.teamRoute)) {
+    return meta.teamRoute;
+  }
   if (!mayRunTeamMode(chatJid) || !resolveTeamGroup(chatJid)) return null;
   return (meta && decideTeamMessage(chatJid, meta)?.route) || 'reject';
 }
@@ -23498,6 +23509,9 @@ async function main(): Promise<void> {
     reorderFollowUp,
     interruptAndRunFollowUp,
   };
+  // Any binding change (Web, IM /bind, auto-unbind, repair) ends the work
+  // items of a group that no longer runs team mode where it did.
+  setChannelMountChangeListener(reconcileTeamGroup);
   injectChannelMountRuntimePort({
     getRegisteredGroups: webRuntimeDeps.getRegisteredGroups,
     clearImFailCounts: webRuntimeDeps.clearImFailCounts,

@@ -1356,6 +1356,91 @@ describe('recall', () => {
   });
 });
 
+describe('after the review on the Mac mini', () => {
+  test('a planned lane holds only while its item and router do', async () => {
+    storeCandidate('om_hold');
+    const item = store.getWorkItem(
+      (await accept('om_hold')).workItemId as string,
+    )!;
+    const lane = {
+      effectiveJid: `${WORKSPACE}#agent:${item.agentId}`,
+      agentId: item.agentId,
+    };
+    const router = store.getTeamMount(CHAT)!.routerAgentId!;
+    const routerLaneRoute = {
+      effectiveJid: `${WORKSPACE}#agent:${router}`,
+      agentId: router,
+    };
+    expect(service.teamRouteStillHolds(CHAT, lane)).toBe(true);
+    expect(service.teamRouteStillHolds(CHAT, routerLaneRoute)).toBe(true);
+    expect(
+      service.teamRouteStillHolds(CHAT, { effectiveJid: 'x', agentId: 'gone' }),
+    ).toBe(false);
+    await service.stopWorkItem(item.id, ACTOR);
+    expect(service.teamRouteStillHolds(CHAT, lane)).toBe(false);
+    const settings = store.getTeamMount(CHAT)!.settings;
+    await service.saveTeamMountSettings(
+      WORKSPACE,
+      CHAT,
+      { ...settings, enabled: false },
+      ACTOR,
+    );
+    expect(service.teamRouteStillHolds(CHAT, routerLaneRoute)).toBe(false);
+    expect(service.teamRouteStillHolds(CHAT, 'reject')).toBe(false);
+    await enable();
+  });
+
+  test('a binding change reconciles the group', async () => {
+    storeCandidate('om_rebind');
+    const item = store.getWorkItem(
+      (await accept('om_rebind')).workItemId as string,
+    )!;
+    db.setChannelMountChangeListener(service.reconcileTeamGroup);
+    try {
+      // The IM /bind and auto-unbind write the group the same way.
+      setGroup(CHAT, { feishu_chat_mode: 'topic' });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(store.getWorkItem(item.id)).toMatchObject({
+        status: 'ended',
+        outcome: 'stopped',
+      });
+    } finally {
+      db.setChannelMountChangeListener(null);
+      setGroup(CHAT);
+    }
+  });
+
+  test('handing back the message that resumed a finished item ends it as it was', async () => {
+    storeCandidate('om_done');
+    const item = store.getWorkItem(
+      (await accept('om_done')).workItemId as string,
+    )!;
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'ready',
+      summary: '好了',
+    });
+    expect(store.getWorkItem(item.id)?.outcome).toBe('completed');
+    storeFollowup('om_later', { parentId: 'om_done' });
+    expect(store.getWorkItem(item.id)?.status).toBe('open');
+    expect(
+      await service.handleWorkIpc(workerCaller(item), {
+        type: 'work_handback',
+        triggerMessageId: 'om_later',
+        reason: '不是这个工作项的事',
+      }),
+    ).toEqual({ ok: true, data: {} });
+    expect(store.getWorkItem(item.id)).toMatchObject({
+      status: 'ended',
+      outcome: 'completed',
+    });
+    expect(store.listWorkEvents(item.id).at(-1)).toMatchObject({
+      kind: 'resume',
+      state: 'undone',
+    });
+  });
+});
+
 describe('session deletion', () => {
   test('deleting a worker session ends its item', async () => {
     storeCandidate('om_del');

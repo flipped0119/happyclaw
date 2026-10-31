@@ -108,11 +108,16 @@ describe('framework notices of a team lane', () => {
 });
 
 describe('routing a team-mode group message', () => {
-  function host(input: { teamGroup: boolean; decided?: unknown }) {
+  function host(input: {
+    teamGroup: boolean;
+    decided?: unknown;
+    holds?: boolean;
+  }) {
     const decideTeamMessage = vi.fn(() =>
       input.decided ? { route: input.decided } : null,
     );
     const globals: Record<string, unknown> = {
+      teamRouteStillHolds: () => input.holds ?? true,
       mayRunTeamMode: () => input.teamGroup,
       resolveTeamGroup: () => (input.teamGroup ? {} : null),
       decideTeamMessage,
@@ -136,6 +141,15 @@ describe('routing a team-mode group message', () => {
       'reject',
     );
     expect(planned.decideTeamMessage).not.toHaveBeenCalled();
+  });
+
+  test('a planned lane that no longer holds is decided again', () => {
+    const other = { effectiveJid: 'web:ws#agent:r1', agentId: 'r1' };
+    const stale = host({ teamGroup: true, decided: other, holds: false });
+    expect(
+      stale.route({ messageId: 'om_1', senderImId: 'ou_x', teamRoute: lane }),
+    ).toEqual(other);
+    expect(stale.decideTeamMessage).toHaveBeenCalledTimes(1);
   });
 
   test('a lookup without a decision is decided now, never the main session', () => {
@@ -294,6 +308,65 @@ describe('the Feishu connector carries the team decision to the router', () => {
     ).toEqual(lane);
     expect(route('oc_team', meta, plan()).routedMeta).not.toHaveProperty(
       'teamRoute',
+    );
+  });
+});
+
+describe('the queued audience check and composed team inputs', () => {
+  test("a hand-back of the owner's message stays queued in an owner-only group", async () => {
+    const { withTeamInputAttachment, candidateInputItem } =
+      await import('../src/team-gate.js');
+    const { DEFAULT_TEAM_SETTINGS } = await import('../src/work-items.js');
+    const attachments = withTeamInputAttachment(
+      null,
+      candidateInputItem({
+        triggerMessageId: 'om_x',
+        strength: 'explicit',
+        listed: true,
+        addressed: true,
+        settings: { ...DEFAULT_TEAM_SETTINGS, enabled: true },
+        threadItems: [],
+        senderImId: 'ou_owner',
+      }),
+    );
+    const queued = (sender: string, kind: string | null) => ({
+      id: `handback:${sender}`,
+      sender,
+      source_jid: CHAT,
+      source_kind: kind,
+      attachments,
+      channel_context: { provider: 'feishu' },
+    });
+    const withdrawQueuedInput = vi.fn(() => true);
+    const globals: Record<string, unknown> = {
+      listQueuedChannelFollowUps: () => [
+        queued('happyclaw-team', 'work_item_input'),
+        queued('ou_stranger', null),
+      ],
+      getChannelType,
+      readTeamInput,
+      ownerImIdFromPersistedSender: (_jid: string, sender: string) => sender,
+      channelConversationJid: (jid: string) => jid,
+      stripVirtualJidSuffix: (jid: string) => jid,
+      registeredGroups: {},
+      getRegisteredGroup: () => ({ audience_mode: 'owner_only' }),
+      isDirectImConversation: () => false,
+      isSenderAllowedInGroup: (_jid: string, sender?: string) =>
+        sender === 'ou_owner',
+      withdrawQueuedInput,
+      logger: { info: vi.fn() },
+    };
+    const harness = createRuntimeSourceHarness(globals);
+    harness.install('queuedInputImSender');
+    harness.install('withdrawQueuedInputsOutsideAudience');
+    (globals.withdrawQueuedInputsOutsideAudience as (jid: string) => void)(
+      LANE,
+    );
+    // The composed hand-back is the owner's; a real stranger's input goes.
+    expect(withdrawQueuedInput).toHaveBeenCalledTimes(1);
+    expect(withdrawQueuedInput).toHaveBeenCalledWith(
+      LANE,
+      'handback:ou_stranger',
     );
   });
 });
