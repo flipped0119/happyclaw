@@ -13,7 +13,6 @@
  */
 import crypto from 'crypto';
 
-import { isAutomationIpcType } from './automation-run-ledger.js';
 import { channelConversationJid } from './channel-address.js';
 import { resolveChannelConversationKind } from './channel-conversation-kind.js';
 import {
@@ -98,6 +97,8 @@ import {
   subscriptionKey,
   TEAM_RULE_LIMIT,
   TEAM_RULE_TEXT_LIMIT,
+  TEAM_LANE_POLICY,
+  teamLaneWithholdsTool,
   WORK_IPC_TYPES,
   type TeamRole,
   type TeamSettings,
@@ -2041,36 +2042,35 @@ export function countOpenWorkItems(channelJid: string): number {
   return countWorkItemsByChannel(channelJid, 'open');
 }
 
+/** IPC request types of tools that are not their own name. */
+const IPC_TYPE_TOOL: Record<string, string> = {
+  message: 'send_message',
+  image: 'send_image',
+};
+
 /**
- * Refuse a team session's IPC that would reach a chat or the Feishu API
- * beyond reading, or schedule an automation. Team sessions speak only through the team tools; of the
- * Feishu capabilities they keep exactly the reads (an allowlist, so a new
- * capability stays refused until it is added here). Null when allowed.
+ * Why a team session's IPC request is refused, or null when it may run. One
+ * table for both sides (TEAM_LANE_POLICY): the Runner does not register these
+ * tools, and the host refuses their requests. Of the Feishu capabilities a
+ * team session keeps exactly the reads (an allowlist, so a new capability
+ * stays refused until it is added there).
  */
 export function teamIpcRefusal(
   type: string,
   operation: string | undefined,
 ): string | null {
-  if (type === 'send_file') return TEAM_SESSION_TOOL_REFUSAL;
-  // A team session's work is a work item: it schedules nothing.
-  if (isAutomationIpcType(type)) return TEAM_SESSION_AUTOMATION_REFUSAL;
   if (type === 'feishu_capability') {
-    return operation && TEAM_FEISHU_READ_OPERATIONS.has(operation)
+    return operation &&
+      (TEAM_LANE_POLICY.feishuReadOperations as readonly string[]).includes(
+        operation,
+      )
       ? null
       : TEAM_SESSION_TOOL_REFUSAL;
   }
-  return null;
+  return teamLaneWithholdsTool(IPC_TYPE_TOOL[type] ?? type)
+    ? TEAM_SESSION_TOOL_REFUSAL
+    : null;
 }
 
-const TEAM_FEISHU_READ_OPERATIONS: ReadonlySet<string> = new Set([
-  'get_chat',
-  'list_members',
-  'get_user',
-  'get_history',
-]);
-
-const TEAM_SESSION_AUTOMATION_REFUSAL =
-  'Team-mode sessions do not use automations; a recurring need is a request for the router.';
-
 const TEAM_SESSION_TOOL_REFUSAL =
-  'Team-mode sessions only read from Feishu. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';
+  'Team-mode sessions use only their work tools and Feishu reads: a router replies with work_reply; a worker acknowledges with work_ack and reports with work_report. Messages, files, cards, automations and Skill changes are not theirs to make.';

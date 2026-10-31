@@ -257,3 +257,41 @@ describe('a suppressed proactive final', () => {
     expect(logger.debug).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('tools a team session may not use', () => {
+  test('install_skill from a team lane is refused before anything is installed', async () => {
+    const { teamIpcRefusal } = await import('../src/work-item-service.js');
+    const results: Record<string, unknown>[] = [];
+    const installSkillForUser = vi.fn();
+    const globals: Record<string, unknown> = {
+      resolveTeamRole: (agentId: string | null) =>
+        agentId === 'w1'
+          ? { role: 'worker', workItemId: 'i1', writable: true }
+          : null,
+      teamIpcRefusal,
+      installSkillForUser,
+      writeTaskResult: (
+        _dir: string,
+        _type: string,
+        _id: string,
+        payload: Record<string, unknown>,
+      ) => results.push(payload),
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    };
+    const harness = createRuntimeSourceHarness(globals);
+    harness.install('processTaskIpc');
+    await (globals.processTaskIpc as (...a: unknown[]) => Promise<void>)(
+      { type: 'install_skill', requestId: 'r1', package: 'evil/skill' },
+      'ws',
+      false,
+      false,
+      { folder: 'ws', created_by: 'owner' },
+      '/tmp/unused',
+      'w1',
+    );
+    expect(installSkillForUser).not.toHaveBeenCalled();
+    expect(results).toEqual([
+      expect.objectContaining({ success: false, requestId: 'r1' }),
+    ]);
+  });
+});

@@ -64,7 +64,6 @@ import {
   canDeleteAcknowledgedIpcSource,
   resolveHostIpcLogicalChatJid,
   NATIVE_ROUTE_UNAVAILABLE_ERROR,
-  TEAM_SESSION_IM_REFUSAL,
   routeHostIpcOutput,
 } from './host-ipc-output-router.js';
 import { resolveBoundWorkspaceJid } from './workspace-attribution.js';
@@ -12525,6 +12524,31 @@ function startIpcWatcher(): void {
             const data = JSON.parse(raw);
             messageRequestId =
               typeof data.requestId === 'string' ? data.requestId : undefined;
+            // A team session reaches people only through its work tools.
+            const teamRefusal = ipcTeamSession()
+              ? teamIpcRefusal(data.type, undefined)
+              : null;
+            if (teamRefusal) {
+              messageResultWritten = writeIpcMessageResult(
+                messageResultsDir,
+                messageRequestId,
+                { success: false, error: teamRefusal },
+              );
+              logger.warn(
+                { sourceGroup, agentId: ipcAgentId, type: data.type },
+                'Rejected a tool a team-mode session may not use',
+              );
+              if (
+                !canDeleteAcknowledgedIpcSource(
+                  messageRequestId,
+                  messageResultWritten,
+                )
+              ) {
+                throw new Error('Failed to acknowledge refused team request');
+              }
+              await fsp.unlink(filePath);
+              continue;
+            }
             if (
               data.type === 'message' &&
               (typeof data.chatJid !== 'string' ||
@@ -12643,7 +12667,6 @@ function startIpcWatcher(): void {
                   deliveryRole: data.deliveryRole,
                   authorized,
                   interactionMode: ipcInteractionMode,
-                  teamSession: ipcTeamSession(),
                   // The channel the input came from, recorded when its turn
                   // was bound, and whether its own reply route is still open.
                   turnSource:
@@ -12705,9 +12728,7 @@ function startIpcWatcher(): void {
                     ? 'A different final has already sealed this input turn; the second final was not sent.'
                     : hostOutputRoute.reason === 'native_route_unavailable'
                       ? NATIVE_ROUTE_UNAVAILABLE_ERROR
-                      : hostOutputRoute.reason === 'team_session'
-                        ? TEAM_SESSION_IM_REFUSAL
-                        : 'Unauthorized message target.';
+                      : 'Unauthorized message target.';
                 logger.warn(
                   {
                     sourceGroup,
@@ -13131,17 +13152,6 @@ function startIpcWatcher(): void {
                         messageDeliveryError ??
                         'Message could not be delivered to its target.',
                     },
-              );
-            } else if (data.type === 'image' && ipcTeamSession()) {
-              // Team-mode sessions never post to a chat themselves.
-              messageResultWritten = writeIpcMessageResult(
-                messageResultsDir,
-                messageRequestId,
-                { success: false, error: TEAM_SESSION_IM_REFUSAL },
-              );
-              logger.warn(
-                { sourceGroup, agentId: ipcAgentId },
-                'Rejected IPC send_image from a team-mode session',
               );
             } else if (
               data.type === 'image' &&
@@ -14129,6 +14139,23 @@ async function processTaskIpc(
     return { user, workspaceJid, activeTurn, context };
   };
 
+  // A team session reaches people and the workspace only through its work
+  // tools: every other tool it must not use is refused here, in one place.
+  const teamRefusal = resolveTeamRole(ipcAgentId)
+    ? teamIpcRefusal(data.type, data.operation)
+    : null;
+  if (teamRefusal) {
+    logger.warn(
+      { sourceGroup, agentId: ipcAgentId, type: data.type },
+      'Rejected a tool a team-mode session may not use',
+    );
+    writeTaskResult(tasksDir, data.type, data.requestId, {
+      requestId: data.requestId,
+      success: false,
+      error: teamRefusal,
+    });
+    return;
+  }
   if (isWorkIpcType(data.type)) {
     // The caller is the IPC namespace the request was read from, never the
     // body; the service refuses a router tool from a non-router lane and a
@@ -14143,34 +14170,10 @@ async function processTaskIpc(
     );
     return;
   }
-  if (data.type === 'send_file' || data.type === 'feishu_capability') {
-    const refusal = resolveTeamRole(ipcAgentId)
-      ? teamIpcRefusal(data.type, data.operation)
-      : null;
-    if (refusal) {
-      logger.warn(
-        { sourceGroup, agentId: ipcAgentId, type: data.type },
-        'Rejected a Feishu tool a team-mode session may not use',
-      );
-      writeTaskResult(tasksDir, data.type, data.requestId, {
-        success: false,
-        error: refusal,
-      });
-      return;
-    }
-  }
   if (isLegacyTaskIpcType(data.type)) {
     writeTaskResult(tasksDir, data.type, data.requestId, {
       success: false,
       error: LEGACY_TASK_IPC_ERROR,
-    });
-    return;
-  }
-  if (isAutomationIpcType(data.type) && resolveTeamRole(ipcAgentId)) {
-    writeTaskResult(tasksDir, data.type, data.requestId, {
-      requestId: data.requestId,
-      success: false,
-      error: teamIpcRefusal(data.type, undefined),
     });
     return;
   }

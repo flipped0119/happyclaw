@@ -5,7 +5,6 @@ import path from 'node:path';
 import { channelTurnScope } from '../src/channel-turn-registry.js';
 import {
   NATIVE_ROUTE_UNAVAILABLE_ERROR,
-  TEAM_SESSION_IM_REFUSAL,
   resolveHostIpcLogicalChatJid,
   routeHostIpcOutput,
 } from '../src/host-ipc-output-router.js';
@@ -522,46 +521,5 @@ describe('host IPC primary output routing', () => {
     expect(main).not.toContain(
       'agentStreamingAccText = agentAnswerProjection.answerText;',
     );
-  });
-});
-
-describe('team-mode sessions', () => {
-  test('send_message from a team router or worker is refused before any delivery', () => {
-    const registry = new ActiveTurnOutputRegistry();
-    for (const deliveryRole of ['final', 'progress', 'separate', undefined]) {
-      expect(
-        routeHostIpcOutput(
-          {
-            sourceGroup: 'team-ws',
-            agentId: 'worker-1',
-            inputTurnId: 'om_1',
-            text: 'hello',
-            deliveryRole,
-            authorized: true,
-            interactionMode: 'proactive',
-            teamSession: true,
-          },
-          registry,
-        ),
-      ).toMatchObject({ path: 'rejected', reason: 'team_session' });
-    }
-    expect(TEAM_SESSION_IM_REFUSAL).toContain('work_reply');
-  });
-
-  test('other sessions are routed as before', () => {
-    const registry = new ActiveTurnOutputRegistry();
-    expect(
-      routeHostIpcOutput(
-        {
-          sourceGroup: 'team-ws',
-          agentId: 'session-1',
-          text: 'hello',
-          authorized: true,
-          interactionMode: 'proactive',
-          teamSession: false,
-        },
-        registry,
-      ).path,
-    ).toBe('separate_provider');
   });
 });

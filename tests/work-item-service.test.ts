@@ -1317,12 +1317,25 @@ describe('IPC a team session may not use', () => {
       undefined,
     ]) {
       expect(service.teamIpcRefusal('feishu_capability', write)).toMatch(
-        /only read/,
+        /work tools/,
       );
     }
-    expect(service.teamIpcRefusal('send_file', undefined)).toMatch(/only read/);
-    for (const type of ['automation_create', 'automation_list']) {
-      expect(service.teamIpcRefusal(type, undefined)).toMatch(/automations/);
+    expect(service.teamIpcRefusal('send_file', undefined)).toMatch(
+      /work tools/,
+    );
+    for (const type of [
+      'automation_create',
+      'automation_list',
+      'install_skill',
+      'uninstall_skill',
+      'message',
+      'image',
+      'schedule_task',
+    ]) {
+      expect(service.teamIpcRefusal(type, undefined)).toMatch(/work tools/);
+    }
+    for (const type of ['work_report', 'workspace_memory', 'fresh_window']) {
+      expect(service.teamIpcRefusal(type, undefined)).toBeNull();
     }
     expect(service.teamIpcRefusal('workspace_memory', undefined)).toBeNull();
   });
