@@ -328,6 +328,23 @@ export function countImWords(text: string): number {
   return count;
 }
 
+/**
+ * Characters as a second ceiling: a long URL or a run of symbols counts as
+ * few words but still floods a chat.
+ */
+export const TEAM_IM_CHAR_LIMIT = 600;
+
+/** Why a team message may not go to a chat, or null when it may. */
+export function imTextLimitError(text: string): string | null {
+  if (!text.trim()) return 'Message text is empty.';
+  if (text.length > TEAM_IM_CHAR_LIMIT)
+    return `Message is ${text.length} characters; the limit is ${TEAM_IM_CHAR_LIMIT}. Rewrite it shorter.`;
+  const words = countImWords(text);
+  if (words > TEAM_IM_WORD_LIMIT)
+    return `Message is ${words} words; the limit is ${TEAM_IM_WORD_LIMIT}. Rewrite it shorter.`;
+  return null;
+}
+
 export type WorkReplyPurpose = 'ack' | 'result' | 'attention' | 'answer';
 
 // ── Runner ↔ host (IPC) ────────────────────────────────────────────────
