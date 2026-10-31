@@ -12,6 +12,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronsUpDown,
   History,
   LayoutGrid,
   Loader2,
@@ -547,10 +548,27 @@ function effortShown(context: EffortContext): {
  * 34px chip of the vendor mark alone, its touch target padded to 44px.
  */
 const PHONE_PILL_CLASS =
-  'relative inline-flex h-[34px] max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full bg-foreground/[0.06] text-caption font-medium text-foreground transition-colors duration-100 before:absolute before:-inset-[5px] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none active:bg-surface-hover aria-disabled:cursor-default data-[state=open]:bg-surface-hover';
+  'relative inline-flex max-w-full min-w-0 cursor-pointer items-center gap-1 rounded-full bg-foreground/[0.06] text-caption font-medium text-foreground transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none active:bg-surface-hover aria-disabled:cursor-default data-[state=open]:bg-surface-hover';
 
 function phonePillClass(compact: boolean): string {
-  return cn(PHONE_PILL_CLASS, compact ? 'w-[34px] justify-center' : 'px-2.5');
+  return cn(
+    PHONE_PILL_CLASS,
+    // The resting pill keeps the 34px of the + and send beside it.
+    compact
+      ? 'h-[34px] w-[34px] justify-center before:absolute before:-inset-[5px]'
+      : 'h-7 px-3 before:absolute before:-inset-x-1 before:-inset-y-2',
+  );
+}
+
+/** Jarvis's chip chevron: up and down, small and faded. */
+function ChipChevron() {
+  return (
+    <ChevronsUpDown
+      className="size-3 shrink-0 opacity-60"
+      strokeWidth={2.6}
+      aria-hidden="true"
+    />
+  );
 }
 
 /**
@@ -949,12 +967,17 @@ export function ModelSelector({
       <Sparkles className="size-3" aria-hidden="true" />
     </span>
   );
-  const chevron = canChange && (
-    <ChevronDown
-      className="size-3.5 shrink-0 text-muted-foreground"
-      aria-hidden="true"
-    />
-  );
+  const chevron =
+    canChange && phone && !compact ? (
+      <ChipChevron />
+    ) : (
+      canChange && (
+        <ChevronDown
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
+      )
+    );
 
   // A sheet on phones and narrow windows, a popover otherwise; both roots
   // hand the trigger its open state and popup semantics.
@@ -1193,18 +1216,28 @@ function EffortMenu({
               )}
             >
               <Brain
-                className="size-4 shrink-0 text-muted-foreground"
+                className={cn(
+                  'shrink-0',
+                  touch ? 'size-3.5' : 'size-4 text-muted-foreground',
+                )}
+                strokeWidth={touch ? 2.4 : undefined}
                 aria-hidden="true"
               />
               <span className="whitespace-nowrap">
-                {level ? effortLabel(level) : '选择推理等级'}
+                {/* Jarvis's 思考 高: the chip says what it sets. */}
+                {level
+                  ? `${touch ? '思考 ' : ''}${effortLabel(level)}`
+                  : '选择推理等级'}
               </span>
-              {!disabled && (
-                <ChevronDown
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                  aria-hidden="true"
-                />
-              )}
+              {!disabled &&
+                (touch ? (
+                  <ChipChevron />
+                ) : (
+                  <ChevronDown
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                ))}
             </button>
           </TooltipTrigger>
         </DropdownMenuTrigger>

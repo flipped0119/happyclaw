@@ -4,7 +4,9 @@
  * Modified for HappyClaw: adapted against cindy 7be4c57d7b and runs on
  * Tiptap 3.30.6. Voice, companion-call and create-agent variants are dropped;
  * HappyClaw adds the queue glyph and a busy spinner to the same stacked,
- * cross-fading icon layers, painted with HappyClaw tokens.
+ * cross-fading icon layers, painted with HappyClaw tokens. A phone paints
+ * it after Jarvis: the accent, faded while there is nothing to send, and a
+ * red stop.
  *
  * Send / Stop button: one round 30px target whose glyph cross-fades in place
  * (send arrow, queue, stop square, spinner) instead of swapping elements.
@@ -52,8 +54,12 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(
           // A phone: cindy's 34px send, its touch target padded to 44px.
           'lg:pointer-coarse:size-10 phone:size-[34px] phone:before:absolute phone:before:-inset-[5px]',
           idle
-            ? 'cursor-not-allowed bg-muted text-faint-foreground'
+            ? 'cursor-not-allowed bg-muted text-faint-foreground phone:bg-primary/40 phone:text-primary-foreground'
             : 'bg-foreground text-background hover:bg-foreground/85 active:scale-95',
+          !idle &&
+            (glyph === 'stop'
+              ? 'phone:bg-error phone:text-white phone:hover:bg-error/85'
+              : 'phone:bg-primary phone:text-primary-foreground phone:hover:bg-primary/85'),
         )}
       >
         <span className="grid size-4 place-items-center" aria-hidden>

@@ -30,12 +30,12 @@ import { useDockOverlay } from './composerDock';
 
 /**
  * Composer toolbar pill (cindy's dropdown tier): bare at rest, an outline and
- * hover fill on hover or while its menu is open. A phone gets cindy's 34px
- * tool button with a light fill and a hairline, its touch target padded to
- * 44px; a touch tablet keeps 40px.
+ * hover fill on hover or while its menu is open. A phone gets Jarvis's 34px
+ * round button, a faint fill and the accent glyph, its touch target padded
+ * to 44px; a touch tablet keeps 40px.
  */
 const COMPOSER_PILL =
-  'relative size-[30px] shrink-0 rounded-full border border-transparent text-muted-foreground hover:border-surface-border hover:bg-surface-hover hover:text-foreground data-[state=open]:border-surface-border data-[state=open]:bg-surface-hover lg:pointer-coarse:size-10 phone:size-[34px] phone:border-surface-border phone:bg-muted phone:before:absolute phone:before:-inset-[5px]';
+  'relative size-[30px] shrink-0 rounded-full border border-transparent text-muted-foreground hover:border-surface-border hover:bg-surface-hover hover:text-foreground data-[state=open]:border-surface-border data-[state=open]:bg-surface-hover lg:pointer-coarse:size-10 phone:size-[34px] phone:bg-foreground/[0.06] phone:text-primary-text phone:hover:border-transparent phone:data-[state=open]:border-transparent phone:before:absolute phone:before:-inset-[5px]';
 
 interface ComposerToolbarProps {
   canAttach: boolean;

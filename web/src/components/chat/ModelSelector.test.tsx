@@ -1477,7 +1477,7 @@ describe('on a phone with many models', () => {
     expect(pill()!.getAttribute('aria-label')).toBe(
       '模型：Claude 官方 · opus，推理等级：默认（超高）',
     );
-    expect(pill()!.className).toContain('h-[34px]');
+    expect(pill()!.className).toContain('h-7');
     expect(pill()!.className).toContain('text-caption');
     expect(pill()!.className).toContain('font-medium');
     // The model name gives way first; the level stays whole.
@@ -1655,8 +1655,8 @@ describe("a phone's model menu", () => {
     await render(null);
     expect(pill()!.textContent).toBe('opus');
     expect(pill()!.getAttribute('aria-label')).toBe('模型：Claude 官方 · opus');
-    expect(effortTrigger()!.textContent).toBe('超高');
-    expect(effortTrigger()!.className).toContain('h-[34px]');
+    expect(effortTrigger()!.textContent).toBe('思考 超高');
+    expect(effortTrigger()!.className).toContain('h-7');
     await openEffort();
     expect(effortItems().map(itemText)).toEqual([
       '默认 · 超高',

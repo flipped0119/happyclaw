@@ -413,8 +413,8 @@ test.describe('phone model menu', () => {
     );
     await expectRowFits(page);
     const chip = page.locator('[data-hc-composer] [data-effort-chip]');
-    await expect(chip).toHaveText('中');
-    expect((await chip.boundingBox())!.height).toBe(34);
+    await expect(chip).toHaveText('思考 中');
+    expect((await chip.boundingBox())!.height).toBe(28);
     await chip.tap();
     await expect(page.getByText('最快，简单的事够用')).toBeVisible();
     await page.getByRole('menuitemradio', { name: /^高/ }).tap();
@@ -422,7 +422,7 @@ test.describe('phone model menu', () => {
     expect(puts[0]).toMatchObject({ model: 'gpt-6-astra', effort: 'high' });
     await expect.poll(() => dockState(page)).toBe('pill');
     await openComposerCard(page);
-    await expect(chip).toHaveText('高');
+    await expect(chip).toHaveText('思考 高');
   });
 });
 
