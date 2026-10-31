@@ -83,7 +83,7 @@ Agent Profile（身份、四段 Prompt、能力策略）
 | `src/automation-scheduler.ts`      | 自动化的到期触发、前置检查、错过与重启恢复             |
 | `src/automation-service.ts`        | 自动化的校验、权限，REST 与 Agent 工具共用             |
 | `src/memory-service.ts`            | Workspace Memory 召回、目录、提议与审计                |
-| `src/team-gate.ts`                 | 团队模式入站：订阅键、名单与 @ 判定、准入表           |
+| `src/team-gate.ts`                 | 团队模式入站：订阅键、名单与 @ 判定、准入表            |
 | `src/work-item-service.ts`         | 工作项的路由、生命周期、回复门控，REST 与 IPC 共用     |
 | `src/work-item-runtime.ts`         | 团队输入注入各 lane、团队回复经 Outbox 投递            |
 
