@@ -1,4 +1,5 @@
 import {
+  ClipboardList,
   MessageCircle,
   Timer,
   Bot,
@@ -29,6 +30,7 @@ export const baseNavItems: NavItem[] = [
     label: '自动化',
     guestVisible: true,
   },
+  { path: '/work', icon: ClipboardList, label: '工作项', hideOnMobile: true },
   { path: '/usage', icon: BarChart3, label: '用量', hideOnMobile: true },
   {
     path: '/memory',

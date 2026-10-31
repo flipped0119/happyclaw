@@ -6,6 +6,7 @@ import { ALL_PERMISSIONS } from './permissions.js';
 import type { Permission } from './types.js';
 import { MAX_GROUP_NAME_LEN } from './group-constants.js';
 import { AUTOMATION_LIMITS } from './automation.js';
+import { TEAM_RULE_LIMIT, TEAM_RULE_TEXT_LIMIT } from './work-items.js';
 import {
   getModelPreset,
   isValidModelId,
@@ -128,6 +129,38 @@ export const AutomationPatchSchema = z
 
 export const AutomationMarkReadSchema = z.object({
   runIds: z.array(z.string().min(1).max(128)).max(500).optional(),
+});
+
+// Team mode (团队模式): a group mount's settings as the owner saves them.
+// `version` is the server's to bump, so the body never carries it.
+export const TEAM_RULE_NAME_LIMIT = 60;
+
+const TeamUnaddressedSchema = z.enum(['inferred', 'ignore']);
+
+export const TeamSettingsBodySchema = z.object({
+  settings: z.object({
+    enabled: z.boolean(),
+    admission: z.object({
+      listedUnaddressed: TeamUnaddressedSchema,
+      unlistedAddressed: z.enum(['explicit', 'inferred', 'ignore']),
+      unlistedUnaddressed: TeamUnaddressedSchema,
+    }),
+    acceptMode: z.enum(['off', 'observe', 'auto']),
+    rules: z
+      .array(
+        z.object({
+          id: z.string().min(1).max(64),
+          name: z.string().trim().min(1).max(TEAM_RULE_NAME_LIMIT),
+          instruction: z.string().trim().min(1).max(TEAM_RULE_TEXT_LIMIT),
+          enabled: z.boolean(),
+        }),
+      )
+      .max(TEAM_RULE_LIMIT)
+      .refine(
+        (rules) => new Set(rules.map((rule) => rule.id)).size === rules.length,
+        { message: 'Rule ids must be unique' },
+      ),
+  }),
 });
 
 // 单张图片附件上限 5MB（base64 编码后约 6.67MB）

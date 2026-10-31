@@ -419,6 +419,9 @@ export interface AgentInfo {
     | 'auto_im'
     | 'channel_direct'
     | 'automation'
+    /** Team mode: the session that routes a group, and a work item's worker. */
+    | 'team_router'
+    | 'work_item'
     | null;
   /** Sessions an automation opened (fresh / persistent runs). */
   automation_id?: string | null;

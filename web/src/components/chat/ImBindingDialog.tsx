@@ -34,6 +34,8 @@ import { useChatStore } from '../../stores/chat';
 import { api } from '../../api/client';
 import { showToast } from '../../utils/toast';
 import type { AgentInfo, AvailableImGroup } from '../../types';
+import { teamModeWorkspaceOf } from '../../lib/team-mode';
+import { TeamModeDialog } from '../team/TeamModeDialog';
 import { ChannelAccountBadge, ChannelBadge } from '../settings/channel-meta';
 import {
   ACTIVATION_MODE_OPTIONS,
@@ -196,6 +198,7 @@ export function ImBindingDialog({
   const [audienceModes, setAudienceModes] = useState<
     Record<string, 'everyone' | 'owner_only'>
   >({});
+  const [teamGroup, setTeamGroup] = useState<AvailableImGroup | null>(null);
   const syncGeneration = useRef(0);
 
   const loadAvailableImGroups = useChatStore((s) => s.loadAvailableImGroups);
@@ -843,10 +846,23 @@ export function ImBindingDialog({
                       {(boundToThis || policyMismatch || boundToOther) && (
                         <div className="col-span-2 col-start-2 flex min-w-0 flex-col items-start gap-1.5">
                           {boundToThis && (
-                            <Badge variant="success">
-                              <Link2 />
-                              已绑定当前{isWorkspaceMode ? '工作区' : '会话'}
-                            </Badge>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge variant="success">
+                                <Link2 />
+                                已绑定当前{isWorkspaceMode ? '工作区' : '会话'}
+                              </Badge>
+                              {!isWorkspaceMode &&
+                                teamModeWorkspaceOf(group) === groupJid && (
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={() => setTeamGroup(group)}
+                                  >
+                                    <Users />
+                                    团队模式
+                                  </Button>
+                                )}
+                            </div>
                           )}
                           {policyMismatch && (
                             <div className="flex items-start gap-1 text-caption leading-5 text-warning">
@@ -1052,6 +1068,15 @@ export function ImBindingDialog({
         }
         confirmText="换绑"
       />
+
+      {teamGroup && (
+        <TeamModeDialog
+          workspaceJid={groupJid}
+          channelJid={teamGroup.jid}
+          channelName={teamGroup.name}
+          onClose={() => setTeamGroup(null)}
+        />
+      )}
     </>
   );
 }
