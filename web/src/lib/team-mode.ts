@@ -6,6 +6,7 @@ import type {
   TeamAcceptMode,
   TeamSettings,
   WorkDecisionKind,
+  WorkEventKind,
   WorkItemView,
   WorkReportState,
   WorkStage,
