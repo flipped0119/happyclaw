@@ -108,21 +108,14 @@ describe('framework notices of a team lane', () => {
 });
 
 describe('routing a team-mode group message', () => {
-  function host(input: {
-    teamGroup: boolean;
-    cached?: unknown;
-    fresh?: unknown;
-    primary?: { outcome: string | null } | undefined;
-  }) {
+  function host(input: { teamGroup: boolean; decided?: unknown }) {
     const decideTeamMessage = vi.fn(() =>
-      input.fresh ? { decision: input.fresh } : null,
+      input.decided ? { route: input.decided } : null,
     );
     const globals: Record<string, unknown> = {
+      mayRunTeamMode: () => input.teamGroup,
       resolveTeamGroup: () => (input.teamGroup ? {} : null),
-      recallTeamDecision: () => input.cached,
-      getWorkItem: () => input.primary,
       decideTeamMessage,
-      laneJidOf,
     };
     const harness = createRuntimeSourceHarness(globals);
     harness.install('resolveTeamRoute');
@@ -130,59 +123,32 @@ describe('routing a team-mode group message', () => {
       (globals.resolveTeamRoute as (...a: unknown[]) => unknown)(CHAT, meta);
     return { route, decideTeamMessage };
   }
-  const subscribed = (agentId: string) => ({
-    kind: 'subscribed',
-    workspaceJid: 'web:ws',
-    items: [{ id: `w-${agentId}`, agentId }],
-  });
+  const lane = { effectiveJid: 'web:ws#agent:a1', agentId: 'a1' };
 
   test('outside team mode nothing changes', () => {
     expect(host({ teamGroup: false }).route({ messageId: 'om_1' })).toBeNull();
   });
 
-  test('a lost decision is made again, never the main session', () => {
-    const fresh = host({ teamGroup: true, fresh: subscribed('a2') });
-    expect(fresh.route({ messageId: 'om_1', senderImId: 'ou_x' })).toEqual({
-      effectiveJid: 'web:ws#agent:a2',
-      agentId: 'a2',
-    });
-    expect(fresh.decideTeamMessage).toHaveBeenCalled();
-    // Nothing to decide with (no sender): rejected, not routed to main.
+  test("the plan's decision is used as is, never made twice", () => {
+    const planned = host({ teamGroup: true });
+    expect(planned.route({ messageId: 'om_1', teamRoute: lane })).toEqual(lane);
+    expect(planned.route({ messageId: 'om_1', teamRoute: 'reject' })).toBe(
+      'reject',
+    );
+    expect(planned.decideTeamMessage).not.toHaveBeenCalled();
+  });
+
+  test('a lookup without a decision is decided now, never the main session', () => {
+    const fresh = host({ teamGroup: true, decided: lane });
+    expect(fresh.route({ messageId: 'om_1', senderImId: 'ou_x' })).toEqual(
+      lane,
+    );
+    expect(fresh.decideTeamMessage).toHaveBeenCalledTimes(1);
+    // Nothing to decide with (no sender, as on a card callback): rejected.
     expect(host({ teamGroup: true }).route({ messageId: 'om_1' })).toBe(
       'reject',
     );
-    expect(
-      host({ teamGroup: true, cached: { kind: 'ignore' } }).route({
-        messageId: 'om_1',
-      }),
-    ).toBe('reject');
-  });
-
-  test('a decision whose first item was stopped is made again', () => {
-    const stopped = host({
-      teamGroup: true,
-      cached: subscribed('a1'),
-      primary: { outcome: 'stopped' },
-      fresh: {
-        kind: 'candidate',
-        workspaceJid: 'web:ws',
-        routerAgentId: 'router-1',
-      },
-    });
-    expect(stopped.route({ messageId: 'om_1', senderImId: 'ou_x' })).toEqual({
-      effectiveJid: LANE,
-      agentId: 'router-1',
-    });
-    const live = host({
-      teamGroup: true,
-      cached: subscribed('a1'),
-      primary: { outcome: null },
-    });
-    expect(live.route({ messageId: 'om_1' })).toEqual({
-      effectiveJid: 'web:ws#agent:a1',
-      agentId: 'a1',
-    });
-    expect(live.decideTeamMessage).not.toHaveBeenCalled();
+    expect(host({ teamGroup: true }).route(undefined)).toBe('reject');
   });
 });
 
@@ -293,5 +259,41 @@ describe('tools a team session may not use', () => {
     expect(results).toEqual([
       expect.objectContaining({ success: false, requestId: 'r1' }),
     ]);
+  });
+});
+
+describe('the Feishu connector carries the team decision to the router', () => {
+  test('the routed meta holds the lane the plan chose, with the original root kept for the decision', async () => {
+    const { buildFeishuRouteTarget } = await import('../src/feishu.js');
+    const harness = createRuntimeSourceHarness(
+      { buildFeishuRouteTarget },
+      new URL('../src/feishu.ts', import.meta.url),
+    );
+    harness.install('planFeishuRoute');
+    const plan = (team?: unknown) => ({
+      disabled: false,
+      allowWithoutMention: true,
+      independentContext: false,
+      reason: 'shared_chat',
+      ...(team ? { team } : {}),
+    });
+    const meta = {
+      provider: 'feishu',
+      chatType: 'group',
+      messageId: 'om_2',
+      parentId: 'om_1',
+      rootId: 'om_1',
+    };
+    const route = harness.globals.planFeishuRoute as (...a: unknown[]) => {
+      routedMeta: Record<string, unknown>;
+    };
+    const lane = { effectiveJid: 'web:ws#agent:w1', agentId: 'w1' };
+    expect(
+      route('oc_team', meta, plan({ outcome: 'subscribed', route: lane }))
+        .routedMeta.teamRoute,
+    ).toEqual(lane);
+    expect(route('oc_team', meta, plan()).routedMeta).not.toHaveProperty(
+      'teamRoute',
+    );
   });
 });

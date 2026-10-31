@@ -185,6 +185,11 @@ export interface ChannelMessageMeta {
   senderImId?: string;
   /** The sender is a bot or an app, not a person. */
   senderIsBot?: boolean;
+  /**
+   * Team mode: the lane the conversation plan chose for this message, or
+   * `reject`. Set by the connector from the plan; absent outside team mode.
+   */
+  teamRoute?: { effectiveJid: string; agentId: string } | 'reject';
 }
 
 /** @deprecated Use ChannelMessageMeta. Kept for connector compatibility. */

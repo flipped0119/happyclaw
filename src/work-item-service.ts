@@ -39,7 +39,6 @@ import {
   readTeamInput,
   teamTriggerKeys,
   canResumeWorkItem,
-  forgetTeamDecisions,
   type TeamGateDeps,
   type TeamGateGroup,
   type TeamInboundDecision,
@@ -53,6 +52,7 @@ import type {
 import {
   getTeamMount,
   getTeamMountByRouter,
+  listAllTeamMounts,
   getWorkDecisionForTrigger,
   getWorkItem,
   getWorkItemByAgent,
@@ -519,8 +519,6 @@ export async function saveTeamMountSettings(
     updatedBy: actor.userId,
     now: now(),
   });
-  // Decisions made under the old settings route nothing any more.
-  forgetTeamDecisions(channelJid);
   if (!next.enabled) stopGroupWorkItems(channelJid, 'team_mode_off');
   if (newRouter && routerAgentId) {
     redeliverReportsToRouter(channelJid, workspaceJid, routerAgentId);
@@ -553,6 +551,24 @@ export function stopGroupWorkItems(channelJid: string, reason: string): void {
   // Nothing the group was still owed goes out any more.
   for (const reply of listPendingWorkItemReplies()) {
     if (reply.channelJid === channelJid) voidReply(reply, reason);
+  }
+}
+
+/**
+ * Whether a chat may run team mode at all: a Feishu chat with a team mount
+ * row. One indexed lookup; every other chat stops here.
+ */
+export function mayRunTeamMode(channelJid: string): boolean {
+  return (
+    channelJid.startsWith('feishu:') &&
+    getTeamMount(channelJid)?.settings.enabled === true
+  );
+}
+
+/** Reconcile every team-mode group once (startup). */
+export function reconcileAllTeamGroups(): void {
+  for (const team of listAllTeamMounts()) {
+    if (team.settings.enabled) reconcileTeamGroup(team.channelJid);
   }
 }
 

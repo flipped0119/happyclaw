@@ -618,8 +618,6 @@ import {
   decideTeamInbound,
   teamInputFrameOf,
   readTeamInput,
-  recallTeamDecision,
-  rememberTeamDecision,
   type TeamInboundDecision,
 } from './team-gate.js';
 import {
@@ -627,8 +625,9 @@ import {
   followupCopyIdsOf,
   handleWorkIpc,
   isWorkIpcType,
+  mayRunTeamMode,
   onTeamMessageStored,
-  reconcileTeamGroup,
+  reconcileAllTeamGroups,
   resolveTeamGroup,
   resolveTeamRole,
   resumePendingTeamReplies,
@@ -644,7 +643,6 @@ import {
   type TeamReplyOutcome,
   type TeamReplyRequest,
 } from './work-item-runtime.js';
-import { getWorkItem } from './work-item-store.js';
 import type { TeamRole } from './work-items.js';
 import { installSkillForUser, deleteSkillForUser } from './routes/skills.js';
 import { skillMutationTurnRejection } from './skill-ipc-authorization.js';
@@ -20760,22 +20758,24 @@ function resolveFeishuConversationPlanForMessage(
 // ── Team mode (团队模式): gate, route and post-store ──────────────────────
 
 /**
- * Decide where a message of a team-mode group goes (team-gate.ts) and
- * remember it for the inbound router. Null outside team mode, and for a
- * lookup without a sender (card callbacks), which no team rule can judge.
+ * Decide once where a message of a team-mode group goes (team-gate.ts):
+ * the lane, or `reject` when none takes it. Null outside team mode (one
+ * indexed lookup, nothing else, for every other chat), and for a lookup
+ * without a sender (card callbacks), which no team rule can judge.
  */
 function decideTeamMessage(
   chatJid: string,
   meta: ChannelMessageMeta,
-): { context: TeamGroupContext; decision: TeamInboundDecision } | null {
+): {
+  context: TeamGroupContext;
+  decision: TeamInboundDecision;
+  route: { effectiveJid: string; agentId: string } | 'reject';
+} | null {
+  if (!mayRunTeamMode(chatJid)) return null;
   if (meta.chatType !== 'group' || !meta.messageId) return null;
   if (!meta.senderImId && !meta.senderIsBot) return null;
   const context = resolveTeamGroup(chatJid);
-  if (!context) {
-    // A group rebound away from its team-mode workspace ends its items.
-    reconcileTeamGroup(chatJid);
-    return null;
-  }
+  if (!context) return null;
   let decision = decideTeamInbound(
     context,
     teamInboundMessage(meta),
@@ -20788,12 +20788,23 @@ function decideTeamMessage(
     );
     decision = { kind: 'ignore', channelJid: chatJid, reason: 'no_router' };
   }
-  rememberTeamDecision(chatJid, meta.messageId, decision);
   logger.debug(
     { chatJid, messageId: meta.messageId, team: decision.kind },
     'Team mode routed a group message',
   );
-  return { context, decision };
+  const agentId =
+    decision.kind === 'subscribed'
+      ? decision.items[0].agentId
+      : decision.kind === 'candidate'
+        ? decision.routerAgentId
+        : null;
+  return {
+    context,
+    decision,
+    route: agentId
+      ? { effectiveJid: laneJidOf(context.workspaceJid, agentId), agentId }
+      : 'reject',
+  };
 }
 
 function teamInboundMessage(meta: ChannelMessageMeta) {
@@ -20809,11 +20820,10 @@ function teamInboundMessage(meta: ChannelMessageMeta) {
 }
 
 /**
- * The team part of a group message's conversation plan: whether it passes
- * the @ gate (decided now, before commands and the gate run), and the header
- * the stored message carries. The header is read when the connector stores
- * the message, from the decision the router used by then, so the two never
- * disagree even when routing had to decide again.
+ * The team part of a group message's conversation plan, decided once from
+ * the message as it arrived: whether it passes the @ gate, the lane it goes
+ * to (carried to the inbound router on the routed meta) and the header the
+ * stored message carries.
  */
 function resolveTeamPlan(
   chatJid: string,
@@ -20821,42 +20831,31 @@ function resolveTeamPlan(
 ): FeishuConversationPlan['team'] {
   const decided = decideTeamMessage(chatJid, meta);
   if (!decided) return undefined;
-  const { context } = decided;
-  const message = teamInboundMessage(meta);
+  const inputItem = teamInputItemFor(
+    decided.decision,
+    teamInboundMessage(meta),
+    decided.context.settings,
+  );
   return {
     outcome: decided.decision.kind,
-    get inputItem() {
-      const decision =
-        recallTeamDecision(chatJid, message.messageId) ?? decided.decision;
-      return teamInputItemFor(decision, message, context.settings) ?? undefined;
-    },
+    route: decided.route,
+    ...(inputItem ? { inputItem } : {}),
   };
 }
 
 /**
- * The lane a team-mode group message goes to. The decision the gate made is
- * used when it still holds; when it is gone (evicted, another path) or its
- * first item was stopped meanwhile, the message is decided again now. In a
- * team-mode group a message no lane takes is rejected: it never falls back
- * to the workspace's main session. Null outside team mode.
+ * The lane a team-mode group message goes to: the plan's decision, carried
+ * on the routed meta. A lookup that comes without one (another path) is
+ * decided now. In a team-mode group a message no lane takes is rejected: it
+ * never falls back to the workspace's main session. Null outside team mode.
  */
 function resolveTeamRoute(
   chatJid: string,
   meta: ChannelMessageMeta | undefined,
 ): { effectiveJid: string; agentId: string } | 'reject' | null {
-  if (!resolveTeamGroup(chatJid)) return null;
-  let decision = recallTeamDecision(chatJid, meta?.messageId);
-  if (decision?.kind === 'subscribed') {
-    const primary = getWorkItem(decision.items[0].id);
-    if (!primary || primary.outcome === 'stopped') decision = undefined;
-  }
-  decision ??= meta ? decideTeamMessage(chatJid, meta)?.decision : undefined;
-  if (!decision || decision.kind === 'ignore') return 'reject';
-  const agentId =
-    decision.kind === 'subscribed'
-      ? decision.items[0].agentId
-      : decision.routerAgentId;
-  return { effectiveJid: laneJidOf(decision.workspaceJid, agentId), agentId };
+  if (meta?.teamRoute) return meta.teamRoute;
+  if (!mayRunTeamMode(chatJid) || !resolveTeamGroup(chatJid)) return null;
+  return (meta && decideTeamMessage(chatJid, meta)?.route) || 'reject';
 }
 
 /**
@@ -24218,6 +24217,9 @@ async function main(): Promise<void> {
   // Team mode: replies owed to groups before the restart are sent now (a
   // channel not connected yet is retried with backoff).
   resumePendingTeamReplies();
+  // Groups rebound while the service was down stop their work items now;
+  // after this, binding changes reconcile their own group.
+  reconcileAllTeamGroups();
   streamingBuffer.start();
   startMessageLoop();
 

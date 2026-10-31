@@ -1155,6 +1155,9 @@ function planFeishuRoute(
   const inThread = !!plan?.independentContext || !!threadId;
   const routedMeta: FeishuMessageMeta = {
     ...meta,
+    // Team mode decided the lane with the message as it arrived (its root
+    // included); the router uses that decision as is.
+    ...(plan?.team ? { teamRoute: plan.team.route } : {}),
     nativeContextType:
       plan?.independentContext || (!plan && !!threadId) ? 'thread' : undefined,
     contextId: plan?.contextId || threadId,

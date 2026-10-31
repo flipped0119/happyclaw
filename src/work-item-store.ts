@@ -220,6 +220,12 @@ export function getTeamMountByRouter(
   return row ? mapTeamMount(row) : undefined;
 }
 
+export function listAllTeamMounts(): TeamMount[] {
+  return (stmt('SELECT * FROM team_mounts').all() as TeamMountRow[]).map(
+    mapTeamMount,
+  );
+}
+
 export function listTeamMounts(workspaceJid: string): TeamMount[] {
   return (
     stmt('SELECT * FROM team_mounts WHERE workspace_jid = ?').all(

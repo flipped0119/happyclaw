@@ -1,3 +1,5 @@
+import type { ChannelMessageMeta } from './types.js';
+
 export type FeishuActivationMode =
   | 'auto'
   | 'always'
@@ -25,6 +27,8 @@ export interface FeishuConversationPolicyInput {
 
 export interface FeishuTeamPlan {
   outcome: 'subscribed' | 'candidate' | 'ignore';
+  /** The lane the message goes to, or `reject`; carried on the routed meta. */
+  route: NonNullable<ChannelMessageMeta['teamRoute']>;
   /**
    * The hidden header item the stored message carries (see team-gate.ts),
    * as an attachments-JSON entry. Absent for `ignore`.

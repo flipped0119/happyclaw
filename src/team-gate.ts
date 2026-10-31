@@ -195,46 +195,6 @@ export function decideTeamInbound(
   };
 }
 
-// ── Decision cache (gate → route) ──────────────────────────────────────
-
-const DECISIONS_KEPT = 2000;
-const decisions = new Map<string, TeamInboundDecision>();
-
-function decisionKey(channelJid: string, messageId: string): string {
-  return `${channelJid}\u0000${messageId}`;
-}
-
-export function rememberTeamDecision(
-  channelJid: string,
-  messageId: string,
-  decision: TeamInboundDecision,
-): void {
-  const key = decisionKey(channelJid, messageId);
-  decisions.delete(key);
-  decisions.set(key, decision);
-  if (decisions.size > DECISIONS_KEPT) {
-    const oldest = decisions.keys().next().value as string | undefined;
-    if (oldest !== undefined) decisions.delete(oldest);
-  }
-}
-
-/** Team settings changed: decisions made under the old ones are void. */
-export function forgetTeamDecisions(channelJid: string): void {
-  const prefix = `${channelJid}\u0000`;
-  for (const key of [...decisions.keys()]) {
-    if (key.startsWith(prefix)) decisions.delete(key);
-  }
-}
-
-export function recallTeamDecision(
-  channelJid: string,
-  messageId: string | undefined,
-): TeamInboundDecision | undefined {
-  return messageId
-    ? decisions.get(decisionKey(channelJid, messageId))
-    : undefined;
-}
-
 // ── Model-facing input headers ─────────────────────────────────────────
 
 export const TEAM_INPUT_ATTACHMENT_TYPE = 'team_input';
