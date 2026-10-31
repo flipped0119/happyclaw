@@ -1,5 +1,7 @@
 import type { CanUseTool } from '@anthropic-ai/claude-agent-sdk';
 
+import type { TeamRole } from './work-items.js';
+
 /**
  * Built-in tools removed from every session because they depend on a Claude
  * Code process that outlives the turn. The runner ends the CLI process a few
@@ -23,6 +25,24 @@ export const RUNNER_DISALLOWED_BUILTIN_TOOLS: readonly string[] = [
   'EnterPlanMode',
   'ExitPlanMode',
 ];
+
+/** The built-in tools that change files. */
+const FILE_EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const;
+
+/**
+ * Built-in tools a team-mode session runs without. Neither role asks with
+ * AskUserQuestion: a worker asks through `work_report.humanAction` and the
+ * router through `work_reply purpose=attention`. The router only routes, and
+ * a worker on an item it may not change yet (`writable=false`) only
+ * investigates, so neither edits files. Under bypassPermissions `canUseTool`
+ * never sees ordinary tools, so the deny list is the only place to remove
+ * them. No role, no change.
+ */
+export function teamDisallowedTools(teamRole: TeamRole | undefined): string[] {
+  if (!teamRole) return [];
+  const readOnly = teamRole.role === 'router' || !teamRole.writable;
+  return ['AskUserQuestion', ...(readOnly ? FILE_EDIT_TOOLS : [])];
+}
 
 /**
  * Tool result of an AskUserQuestion call. The runner has no interactive

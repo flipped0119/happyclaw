@@ -7,6 +7,7 @@
 // Streaming event types (canonical source: shared/stream-event.ts)
 export type { StreamEventType, StreamEvent } from './stream-event.types.js';
 import type { ClaudeContextAudit, StreamEvent } from './stream-event.types.js';
+import type { TeamRole } from './work-items.js';
 
 export interface ChannelContentLink {
   kind: 'forward_bundle' | 'rapid_topic_bundle';
@@ -227,6 +228,12 @@ export interface ContainerInput {
   chatJid: string;
   /** Workspace-scoped interaction contract for this public Agent turn. */
   interactionMode?: 'assistant' | 'proactive';
+  /**
+   * Team mode (团队模式): this session is a group's router or a work item's
+   * worker. It picks the work tools, the team prompt section and the
+   * disallowed tools; absent leaves the session exactly as it is.
+   */
+  teamRole?: TeamRole;
   /** Source JID of the latest message that triggered this run (e.g. `discord:123…`).
    * Used by per-channel MCP tools (discord_*, etc.) to identify the current
    * incoming chat. Undefined when chatJid already encodes the IM source. */

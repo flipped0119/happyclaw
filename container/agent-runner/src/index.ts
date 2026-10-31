@@ -37,6 +37,7 @@ import { detectImageMimeTypeFromBase64Strict } from './image-detector.js';
 import { isClaudeAttachmentPassDisabled } from './claude-attachments.js';
 import {
   RUNNER_DISALLOWED_BUILTIN_TOOLS,
+  teamDisallowedTools,
   runnerCanUseTool,
   silenceShadowedCanUseToolWarning,
 } from './builtin-tool-policy.js';
@@ -344,6 +345,7 @@ const ASSISTANT_OUTPUT_GUIDELINES = loadPrompt('output.assistant.md');
 const PROACTIVE_OUTPUT_GUIDELINES = loadPrompt('output.proactive.md');
 const WEB_FETCH_GUIDELINES = loadPrompt('web-fetch.md');
 const BACKGROUND_TASK_GUIDELINES = loadPrompt('background-tasks.md');
+const TEAM_BACKGROUND_TASK_GUIDELINES = loadPrompt('background-tasks.team.md');
 const ASSISTANT_DELIVERY_CONTRACT = loadPrompt(
   'delivery-contract.assistant.md',
 );
@@ -356,6 +358,10 @@ const HAPPYCLAW_PLATFORM_IDENTITY = loadPrompt('identity.happyclaw.md');
 const HAPPYCLAW_PLATFORM_BOOTSTRAP = loadPrompt('bootstrap.happyclaw.md');
 const RUNTIME_ADAPTATION = loadPrompt('runtime-adaptation.md');
 const RUNTIME_BASELINE = loadPrompt('runtime-baseline.md');
+const TEAM_PROMPTS = {
+  router: { id: 'team-router', text: loadPrompt('team-router.md') },
+  worker: { id: 'team-worker', text: loadPrompt('team-worker.md') },
+} as const;
 
 // 各渠道共用的格式说明：Web 端始终可看完整渲染，不因来源降级输出。
 // Mermaid 渲染说明已在模式专属 output prompt 中讲过，此处不重复，
@@ -631,10 +637,16 @@ const CHANNEL_GUIDELINES: Record<string, string> = (() => {
   return result;
 })();
 
-/** Format guidance for an input from this channel; none for the Web. */
+/**
+ * Format guidance for an input from this channel; none for the Web, and none
+ * for a team role, whose section covers the format and which has no
+ * send_image/send_file the guidance points at.
+ */
 function channelFormatFor(
   context: ChannelTurnContext | undefined,
+  teamRole: ContainerInput['teamRole'],
 ): string | undefined {
+  if (teamRole) return undefined;
   const guidelines = context && CHANNEL_GUIDELINES[context.provider];
   return guidelines ? `${guidelines}\n${CHANNEL_FORMAT_COMMON}` : undefined;
 }
@@ -2000,7 +2012,10 @@ async function runQueryAttempt(
       memory: memorySnapshot,
       ownerProfile,
       channelContext: containerInput.channelContext,
-      channelFormat: channelFormatFor(containerInput.channelContext),
+      channelFormat: channelFormatFor(
+        containerInput.channelContext,
+        containerInput.teamRole,
+      ),
       anchor: shouldAnchorInitialAgentTurn(emitOutput, sourceKindOverride)
         ? agentTurnAnchor
         : undefined,
@@ -2614,7 +2629,10 @@ async function runQueryAttempt(
           memory: memorySnapshot,
           ownerProfile,
           channelContext: queuedChannelContext,
-          channelFormat: channelFormatFor(queuedChannelContext),
+          channelFormat: channelFormatFor(
+            queuedChannelContext,
+            containerInput.teamRole,
+          ),
           anchor: agentTurnAnchor,
         },
         msg.receipt?.deliveryId ||
@@ -2852,6 +2870,9 @@ async function runQueryAttempt(
   const includeClaudePreset =
     !proactiveInteractiveContract &&
     (containerInput.agentProfile?.includeClaudePreset ?? true);
+  const teamPrompt = containerInput.teamRole
+    ? TEAM_PROMPTS[containerInput.teamRole.role]
+    : undefined;
   const promptPlan = buildHappyClawPromptPlan({
     engine: includeClaudePreset
       ? { id: 'runtime-adaptation', text: RUNTIME_ADAPTATION }
@@ -2881,16 +2902,31 @@ async function runQueryAttempt(
         }
       : {}),
     ...(agentBuilderEnabled ? { agentBuilder: AGENT_BUILDER_GUIDELINES } : {}),
-    output: proactiveInteractiveContract
-      ? PROACTIVE_OUTPUT_GUIDELINES
-      : ASSISTANT_OUTPUT_GUIDELINES,
+    ...(teamPrompt ? { team: teamPrompt } : {}),
+    // A team role speaks through its work tools: its section replaces the
+    // output and delivery contracts, which are built on send_message.
+    ...(teamPrompt
+      ? {}
+      : {
+          output: proactiveInteractiveContract
+            ? PROACTIVE_OUTPUT_GUIDELINES
+            : ASSISTANT_OUTPUT_GUIDELINES,
+        }),
     ...(hasWebTools ? { web: WEB_FETCH_GUIDELINES } : {}),
     ...(backgroundTaskToolsAvailable
-      ? { backgroundTasks: BACKGROUND_TASK_GUIDELINES }
+      ? {
+          backgroundTasks: teamPrompt
+            ? TEAM_BACKGROUND_TASK_GUIDELINES
+            : BACKGROUND_TASK_GUIDELINES,
+        }
       : {}),
-    deliveryContract: proactiveInteractiveContract
-      ? PROACTIVE_DELIVERY_CONTRACT
-      : ASSISTANT_DELIVERY_CONTRACT,
+    ...(teamPrompt
+      ? {}
+      : {
+          deliveryContract: proactiveInteractiveContract
+            ? PROACTIVE_DELIVERY_CONTRACT
+            : ASSISTANT_DELIVERY_CONTRACT,
+        }),
   });
   for (const warning of promptPlan.warnings) log(`[WARN] ${warning}`);
   if (promptPlan.errors.length > 0) {
@@ -3026,6 +3062,7 @@ async function runQueryAttempt(
   const effectiveDisallowedTools = [
     ...new Set([
       ...RUNNER_DISALLOWED_BUILTIN_TOOLS,
+      ...teamDisallowedTools(containerInput.teamRole),
       ...(disallowedTools ?? []),
     ]),
   ];
@@ -4700,6 +4737,7 @@ async function main(): Promise<void> {
     agentBuilderEnabled,
     ownerProfileEnabled: containerInput.happyClawOwnerProfileEnabled === true,
     interactionMode: containerInput.interactionMode ?? 'assistant',
+    teamRole: containerInput.teamRole,
     currentInputTurnId: containerInput.turnId,
     workspaceMemoryMutationAuth:
       containerInput.workspaceMemoryMutationSigningSecret &&
