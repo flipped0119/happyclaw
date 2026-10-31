@@ -18,6 +18,7 @@ export type {
   WorkItemDetail,
 } from '../work-items';
 export { TEAM_RULE_NAME_LIMIT } from '../work-items';
+import { isWorkItemWritable } from '../work-items';
 import { formatAutomationTime } from './automation';
 
 // Team mode (团队模式) on the Web: the REST shapes the shared file does not
@@ -88,8 +89,8 @@ export function workStageVariant(
 export function workPermissionText(
   item: Pick<WorkItemView, 'mandate' | 'approvedAt'>,
 ): string {
-  if (item.mandate.writable) return '可以修改';
-  return item.approvedAt ? '已批准修改' : '只读，批准后才能修改';
+  if (!isWorkItemWritable(item)) return '只读，批准后才能修改';
+  return item.mandate.writable ? '可以修改' : '已批准修改';
 }
 
 export function workItemHref(id: string): string {

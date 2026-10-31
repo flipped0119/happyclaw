@@ -2,6 +2,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { ClipboardList, Lock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/common/EmptyState';
+import { SideListRow } from '@/components/common/SideListRow';
 import { cn } from '@/lib/utils';
 import {
   WORK_DECISION_LABELS,
@@ -13,6 +14,7 @@ import {
   workStageVariant,
 } from '../../lib/team-mode';
 import {
+  isWorkItemWritable,
   stageNeedsPerson,
   type WorkDecision,
   type WorkItemView,
@@ -68,20 +70,12 @@ function WorkItemRow({
   onSelect: (id: string) => void;
 }) {
   const ended = item.status === 'ended';
-  const readOnly = !item.mandate.writable && !item.approvedAt && !ended;
+  const readOnly = !ended && !isWorkItemWritable(item);
   const where = [item.workspaceName, item.channelName]
     .filter(Boolean)
     .join(' · ');
   return (
-    <button
-      type="button"
-      aria-current={selected ? 'true' : undefined}
-      onClick={() => onSelect(item.id)}
-      className={cn(
-        'flex w-full cursor-pointer flex-col gap-1 rounded-lg px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 phone:min-h-11',
-        selected ? 'bg-surface-selected' : 'hover:bg-surface-hover',
-      )}
-    >
+    <SideListRow selected={selected} onSelect={() => onSelect(item.id)}>
       <span className="flex min-w-0 items-center gap-1.5">
         <span
           className={cn(
@@ -110,7 +104,7 @@ function WorkItemRow({
           {[where, formatWorkTime(item.updatedAt)].filter(Boolean).join(' · ')}
         </span>
       )}
-    </button>
+    </SideListRow>
   );
 }
 

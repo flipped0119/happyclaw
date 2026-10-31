@@ -32,7 +32,11 @@ import { openWorkspaceSession } from '../../lib/chat-navigation';
 import { confirmDialog } from '../../stores/confirm';
 import { useWorkItemsStore } from '../../stores/work-items';
 import { extractErrorMessage } from '../../utils/error';
-import type { WorkItemView, WorkReportState } from '../../work-items';
+import {
+  isWorkItemWritable,
+  type WorkItemView,
+  type WorkReportState,
+} from '../../work-items';
 import { PhonePageHeader, PhoneBarButton } from '../layout/PhonePageHeader';
 import { useIsPhone } from '../layout/phone';
 
@@ -96,7 +100,7 @@ export function WorkItemDetail({
   }, [item.id, loadDetail]);
 
   const open = item.status === 'open';
-  const canApprove = open && !item.mandate.writable && !item.approvedAt;
+  const canApprove = open && !isWorkItemWritable(item);
   const openSession = () =>
     openWorkspaceSession(
       navigate,
