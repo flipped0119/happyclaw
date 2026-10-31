@@ -14151,6 +14151,14 @@ async function processTaskIpc(
     });
     return;
   }
+  if (isAutomationIpcType(data.type) && resolveTeamRole(ipcAgentId)) {
+    writeTaskResult(tasksDir, data.type, data.requestId, {
+      requestId: data.requestId,
+      success: false,
+      error: teamIpcRefusal(data.type, undefined),
+    });
+    return;
+  }
   if (isAutomationIpcType(data.type)) {
     const request = data as unknown as AutomationIpcRequest;
     const result = await handleAutomationIpc(request, () =>

@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import crypto from 'crypto';
 import type { Variables } from '../web-context.js';
+import { reconcileTeamGroup } from '../work-item-service.js';
 import {
   getWebDeps,
   hasHostExecutionPermission,
@@ -1412,6 +1413,8 @@ router.put(
         { imJid, sessionId, userId: user.id },
         'IM group bound to workspace session',
       );
+      // Team mode ends where the group no longer runs it.
+      reconcileTeamGroup(imJid);
       return c.json({ success: true });
     }
 
@@ -1517,6 +1520,8 @@ router.put(
       { imJid, targetMainJid, threadCapable, userId: user.id },
       'IM group bound to workspace main session',
     );
+    // Team mode ends where the group no longer runs it.
+    reconcileTeamGroup(imJid);
     return c.json({ success: true });
   },
 );
@@ -1579,6 +1584,8 @@ router.delete(
         },
         'IM channel unbound',
       );
+      // Team mode ends where the group no longer runs it.
+      reconcileTeamGroup(imJid);
       return c.json({ success: true, target_main_jid: restored.workspaceJid });
     }
 
@@ -1601,6 +1608,8 @@ router.delete(
       },
       'IM channel unbound',
     );
+    // Team mode ends where the group no longer runs it.
+    reconcileTeamGroup(imJid);
     return c.json({ success: true, target_main_jid: restored.workspaceJid });
   },
 );
@@ -1737,6 +1746,8 @@ router.put('/:jid/agents/:agentId/im-binding', authMiddleware, async (c) => {
     { imJid, sessionId: agentId, userId: user.id },
     'IM group bound to workspace session',
   );
+  // Team mode ends where the group no longer runs it.
+  reconcileTeamGroup(imJid);
   return c.json({ success: true });
 });
 
@@ -1798,6 +1809,8 @@ router.delete(
       },
       'IM channel unbound',
     );
+    // Team mode ends where the group no longer runs it.
+    reconcileTeamGroup(imJid);
     return c.json({ success: true, target_main_jid: restored.workspaceJid });
   },
 );
@@ -1955,6 +1968,8 @@ router.put('/:jid/im-binding', authMiddleware, async (c) => {
     },
     'IM group bound to workspace main conversation',
   );
+  // Team mode ends where the group no longer runs it.
+  reconcileTeamGroup(imJid);
   return c.json({ success: true });
 });
 
@@ -2006,6 +2021,8 @@ router.delete('/:jid/im-binding/:imJid', authMiddleware, async (c) => {
     },
     'IM channel unbound',
   );
+  // Team mode ends where the group no longer runs it.
+  reconcileTeamGroup(imJid);
   return c.json({ success: true, target_main_jid: restored.workspaceJid });
 });
 

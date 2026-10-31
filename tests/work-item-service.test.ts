@@ -1148,6 +1148,155 @@ describe('team mode going away', () => {
   });
 });
 
+describe('replies after review', () => {
+  test('a failed reply keeps an open question and asks nothing of an ended item', async () => {
+    storeCandidate('om_q1');
+    const item = store.getWorkItem(
+      (await accept('om_q1')).workItemId as string,
+    )!;
+    await service.settleTeamReplies();
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'waiting',
+      summary: '要确认',
+      humanAction: '用哪个分支？',
+      questionForMessageId: 'om_q1',
+    });
+    failReplies = true;
+    await service.handleWorkIpc(routerCaller(), {
+      type: 'work_reply',
+      purpose: 'attention',
+      workItemId: item.id,
+      text: '用哪个分支？',
+    });
+    await service.settleTeamReplies();
+    expect(store.getWorkItem(item.id)).toMatchObject({
+      attention: '用哪个分支？',
+      attentionMessageId: 'om_q1',
+    });
+    expect(store.listWorkEvents(item.id).at(-1)).toMatchObject({
+      kind: 'reply',
+      state: 'failed',
+    });
+
+    failReplies = false;
+    storeCandidate('om_q2');
+    const ended = store.getWorkItem(
+      (await accept('om_q2')).workItemId as string,
+    )!;
+    await service.settleTeamReplies();
+    await service.handleWorkIpc(workerCaller(ended), {
+      type: 'work_report',
+      state: 'ready',
+      summary: '好了',
+    });
+    failReplies = true;
+    await service.handleWorkIpc(routerCaller(), {
+      type: 'work_reply',
+      purpose: 'result',
+      workItemId: ended.id,
+      text: '好了',
+    });
+    await service.settleTeamReplies();
+    expect(store.getWorkItem(ended.id)).toMatchObject({
+      status: 'ended',
+      attention: null,
+    });
+  });
+
+  test('a reply of a group whose team mode went off is voided, not sent', async () => {
+    storeCandidate('om_void');
+    // The channel is down, so the acknowledgement waits for a retry.
+    failReplies = true;
+    replyRetryable = true;
+    await accept('om_void');
+    await service.settleTeamReplies();
+    expect(store.getWorkItemReply('ack:om_void')?.status).toBe('pending');
+    const settings = store.getTeamMount(CHAT)!.settings;
+    await service.saveTeamMountSettings(
+      WORKSPACE,
+      CHAT,
+      { ...settings, enabled: false },
+      ACTOR,
+    );
+    expect(store.getWorkItemReply('ack:om_void')).toMatchObject({
+      status: 'failed',
+      error: 'team_mode_off',
+    });
+    // A reply still pending is not sent once its group left team mode.
+    failReplies = false;
+    replyRetryable = false;
+    store.insertWorkItemReply({
+      id: 'answer:late',
+      workspaceJid: WORKSPACE,
+      workItemId: null,
+      channelJid: CHAT,
+      quoteMessageId: 'om_void',
+      text: '迟到的回答',
+      purpose: 'answer',
+      laneJid: routerLane(),
+      now: new Date().toISOString(),
+    });
+    const before = replies.length;
+    service.resumePendingTeamReplies();
+    await service.settleTeamReplies();
+    expect(replies.length).toBe(before);
+    expect(store.getWorkItemReply('answer:late')?.status).toBe('failed');
+    await enable();
+  });
+
+  test('a ready report made while the router was gone can be answered by the next router', async () => {
+    storeCandidate('om_rr');
+    const item = store.getWorkItem(
+      (await accept('om_rr')).workItemId as string,
+    )!;
+    await service.settleTeamReplies();
+    const team = store.getTeamMount(CHAT)!;
+    store.saveTeamMountSettings({
+      channelJid: CHAT,
+      workspaceJid: WORKSPACE,
+      settings: team.settings,
+      routerAgentId: null,
+      updatedBy: null,
+      now: new Date().toISOString(),
+    });
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'ready',
+      summary: '改好了',
+    });
+    expect(store.listWorkEvents(item.id).at(-1)?.state).toBe('undelivered');
+    await enable();
+    expect(
+      await service.handleWorkIpc(routerCaller(), {
+        type: 'work_reply',
+        purpose: 'result',
+        workItemId: item.id,
+        text: '改好了',
+      }),
+    ).toEqual({ ok: true, data: { queued: true } });
+  });
+
+  test('chat metadata going missing pauses routing without stopping anything', async () => {
+    storeCandidate('om_unk');
+    const item = store.getWorkItem(
+      (await accept('om_unk')).workItemId as string,
+    )!;
+    setGroup(CHAT, { feishu_chat_mode: undefined });
+    expect(service.resolveTeamGroup(CHAT)).toBeNull();
+    service.reconcileTeamGroup(CHAT);
+    expect(store.getWorkItem(item.id)?.status).toBe('open');
+    // A real rebind (a topic group now) stops the group's items.
+    setGroup(CHAT, { feishu_chat_mode: 'topic' });
+    service.reconcileTeamGroup(CHAT);
+    expect(store.getWorkItem(item.id)).toMatchObject({
+      status: 'ended',
+      outcome: 'stopped',
+    });
+    setGroup(CHAT);
+  });
+});
+
 describe('IPC a team session may not use', () => {
   test('of the Feishu capabilities only the reads are allowed', () => {
     for (const read of [
@@ -1172,6 +1321,9 @@ describe('IPC a team session may not use', () => {
       );
     }
     expect(service.teamIpcRefusal('send_file', undefined)).toMatch(/only read/);
+    for (const type of ['automation_create', 'automation_list']) {
+      expect(service.teamIpcRefusal(type, undefined)).toMatch(/automations/);
+    }
     expect(service.teamIpcRefusal('workspace_memory', undefined)).toBeNull();
   });
 });

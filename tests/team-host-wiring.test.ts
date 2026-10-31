@@ -216,3 +216,24 @@ describe('where a stored follow-up fans out', () => {
     expect(onTeamMessageStored).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('no card a team-mode group could click', () => {
+  // A team group rejects routing a lookup without a sender (card callbacks
+  // after a restart). That leaves nothing broken: team lanes create no
+  // reply cards (they run proactive, which publishes no framework answer
+  // and so no streaming card with a stop button) and cannot ask
+  // AskUserQuestion (the Runner withholds it from both roles).
+  test('team lanes neither stream reply cards nor ask questions', async () => {
+    const { publishesFrameworkAnswer } =
+      await import('../src/workspace-interaction-runtime.js');
+    const { teamDisallowedTools } =
+      await import('../container/agent-runner/src/builtin-tool-policy.js');
+    expect(publishesFrameworkAnswer('proactive')).toBe(false);
+    expect(teamDisallowedTools({ role: 'router' })).toContain(
+      'AskUserQuestion',
+    );
+    expect(
+      teamDisallowedTools({ role: 'worker', workItemId: 'w1', writable: true }),
+    ).toContain('AskUserQuestion');
+  });
+});
