@@ -99,6 +99,8 @@ export type TeamInboundDecision =
       items: WorkItem[];
       /** The sender is listed: a follow-up from anyone else authorizes nothing. */
       listed: boolean;
+      /** A structural @ or a reply to one of the bot's own messages. */
+      addressed: boolean;
     }
   | {
       kind: 'candidate';
@@ -134,6 +136,11 @@ export function decideTeamInbound(
 ): TeamInboundDecision {
   const fromBot = message.senderIsBot === true;
   const listed = !fromBot && deps.isListed(message.senderImId);
+  // Judged once, from the message as it arrived, and kept on its header: a
+  // hand-back re-admits it with exactly these facts.
+  const addressed =
+    message.mentionedBot ||
+    (!!message.parentId && deps.isOwnBotMessage(message.parentId));
   // The most specific key that reaches a live item wins: a reply to a
   // message goes to the items of that message only, never also to the
   // items of its root or thread. Items that handed the replied-to message
@@ -164,12 +171,10 @@ export function decideTeamInbound(
         workspaceJid: group.workspaceJid,
         items: reached,
         listed,
+        addressed,
       };
     }
   }
-  const addressed =
-    message.mentionedBot ||
-    (!!message.parentId && deps.isOwnBotMessage(message.parentId));
   const outcome = admitMessage(group.settings, { listed, addressed, fromBot });
   if (outcome === 'ignore') {
     return {

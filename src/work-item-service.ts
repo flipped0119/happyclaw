@@ -799,7 +799,7 @@ export function teamInputItemFor(
       item: primary,
       triggerMessageId: message.messageId,
       listed: decision.listed,
-      addressed: message.mentionedBot,
+      addressed: decision.addressed,
       senderImId: message.senderImId,
       senderIsBot: message.senderIsBot,
       threadId: message.threadId,
@@ -1961,7 +1961,10 @@ function handleWorkHandback(
   if (!row || !original) fail('The follow-up is no longer stored.');
   const facts = original.facts ?? {};
   const fromBot = facts.senderIsBot === true;
-  const listed = !fromBot && isTeamListed(context, facts.senderImId);
+  // The facts the gate judged when the message arrived (its header), not
+  // the copy's or the hand-back's own shape.
+  const listed =
+    !fromBot && (facts.listed ?? isTeamListed(context, facts.senderImId));
   const addressed = facts.addressed === true;
   const strength = admitMessage(context.settings, {
     listed,

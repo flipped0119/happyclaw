@@ -1441,6 +1441,33 @@ describe('after the review on the Mac mini', () => {
   });
 });
 
+describe('a hand-back keeps the facts of the message as it arrived', () => {
+  test("the owner's reply to the bot's message is handed back as an explicit request", async () => {
+    storeCandidate('om_res2');
+    const item = store.getWorkItem(
+      (await accept('om_res2')).workItemId as string,
+    )!;
+    await service.settleTeamReplies();
+    const botMessage =
+      store.getWorkItemReply('ack:om_res2')!.providerMessageId!;
+    // A reply to the bot's message, no @: addressed by its parent.
+    storeFollowup('om_notes', { parentId: botMessage, sender: 'ou_owner' });
+    expect(
+      await service.handleWorkIpc(workerCaller(item), {
+        type: 'work_handback',
+        triggerMessageId: 'om_notes',
+        reason: '新的需求',
+      }),
+    ).toEqual({ ok: true, data: {} });
+    const handed = laneRows(routerLane()).find(
+      (row) => row.id === 'handback:om_notes',
+    )!;
+    expect(gate.readTeamInput(handed.attachments)).toMatchObject({
+      facts: { strength: 'explicit', listed: true, addressed: true },
+    });
+  });
+});
+
 describe('session deletion', () => {
   test('deleting a worker session ends its item', async () => {
     storeCandidate('om_del');
