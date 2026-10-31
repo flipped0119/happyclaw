@@ -63,6 +63,13 @@ check_sync "$ROOT/shared/automation.ts" \
   "$ROOT/web/src/lib/automation.ts" \
   "$ROOT/container/agent-runner/src/automation.ts"
 
+
+# Team mode shapes
+check_sync "$ROOT/shared/work-items.ts" \
+  "$ROOT/src/work-items.ts" \
+  "$ROOT/web/src/work-items.ts" \
+  "$ROOT/container/agent-runner/src/work-items.ts"
+
 if [ "$FAIL" -eq 0 ]; then
   echo "All shared type copies are in sync."
 else

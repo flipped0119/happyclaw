@@ -148,6 +148,32 @@ describe('GroupQueue IPC delivery receipts', () => {
     expect(fs.existsSync(path.join(inputDir(), '_drain'))).toBe(true);
   });
 
+  test('a runner retired after its query takes no new turn', async () => {
+    await startRunner({ interactionMode: 'proactive' });
+    expect(queue.retireRunnerAfterQuery(JID)).toBe(true);
+    expect(queue.sendMessage(JID, 'approved', undefined, undefined, JID)).toBe(
+      'no_active',
+    );
+  });
+
+  test('retiring keeps a stronger close and the clean-up already registered', async () => {
+    await startRunner({ interactionMode: 'proactive' });
+    const state = (
+      queue as unknown as {
+        getGroup(jid: string): {
+          closing: string | null;
+          afterRunnerExit: (() => void) | null;
+        };
+      }
+    ).getGroup(JID);
+    const cleanUp = vi.fn();
+    state.closing = 'reclaim';
+    state.afterRunnerExit = cleanUp;
+    expect(queue.retireRunnerAfterQuery(JID)).toBe(true);
+    expect(state.closing).toBe('reclaim');
+    expect(state.afterRunnerExit).toBe(cleanUp);
+  });
+
   test('accepts a warm scheduled prompt with the runner frozen mode', async () => {
     await startRunner({ interactionMode: 'proactive' });
 

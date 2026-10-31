@@ -181,6 +181,15 @@ export interface ChannelMessageMeta {
   text?: string;
   title?: string;
   channelContext?: ChannelTurnContext;
+  /** The sender's provider id (Feishu open_id); team-mode admission reads it. */
+  senderImId?: string;
+  /** The sender is a bot or an app, not a person. */
+  senderIsBot?: boolean;
+  /**
+   * Team mode: the lane the conversation plan chose for this message, or
+   * `reject`. Set by the connector from the plan; absent outside team mode.
+   */
+  teamRoute?: { effectiveJid: string; agentId: string } | 'reject';
 }
 
 /** @deprecated Use ChannelMessageMeta. Kept for connector compatibility. */
@@ -548,6 +557,11 @@ export type MessageSourceKind =
   | 'scheduled_task_result'
   /** An automation run's input (messages.automation_run_id is set). */
   | 'automation_prompt'
+  /**
+   * Team mode: an input the host composed for a router or worker session
+   * (assignment, follow-up copy, report, approval). No person typed it.
+   */
+  | 'work_item_input'
   | 'legacy'
   | 'auto_continue'
   | 'truncation_continue';
@@ -766,6 +780,10 @@ export interface SubAgent {
     | 'channel_direct'
     /** Run session of an automation (fresh or persistent mode). */
     | 'automation'
+    /** Team mode: the session that routes one group's requests. */
+    | 'team_router'
+    /** Team mode: the session that does one work item. */
+    | 'work_item'
     | null;
   /** automations.id when source_kind='automation'. */
   automation_id?: string | null;
@@ -847,6 +865,7 @@ export interface UsageLimitWaitSnapshot {
 
 export type WsMessageOut =
   | import('./automation-contract.js').AutomationWsEvent
+  | import('./work-items.js').WorkItemWsEvent
   | {
       /**
        * How full a conversation's context is: after each completed turn, and

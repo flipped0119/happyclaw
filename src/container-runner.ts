@@ -166,6 +166,7 @@ import type {
   ChannelTurnContext,
   InteractionMode,
 } from './types.js';
+import type { TeamRole } from './work-items.js';
 import { validateSkillId, validateSkillPath } from './skill-utils.js';
 import type { ClaudeContextAudit } from './stream-event.types.js';
 import type { ContainerOutput } from './agent-runtime-contracts.js';
@@ -751,6 +752,12 @@ export interface ContainerInput {
   contextAudit?: ClaudeContextAudit;
   /** Canonical effective Skill set for SDK selection and run provenance. */
   skillManifest?: { hash: string; selectedSkillIds: string[] };
+  /**
+   * Team mode (团队模式): the session routes a group's requests or does one
+   * work item. The Runner picks tools, prompt section and disallowed tools
+   * from it. Absent for every other session.
+   */
+  teamRole?: TeamRole;
 }
 
 /**

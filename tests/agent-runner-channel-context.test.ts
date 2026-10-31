@@ -408,6 +408,7 @@ describe('channel format guidance', () => {
     harness.install('channelFormatFor');
     const channelFormatFor = harness.globals.channelFormatFor as (
       context: ChannelTurnContext | undefined,
+      teamRole?: { role: 'router' },
     ) => string | undefined;
     expect(channelFormatFor(feishuContext())).toBe(
       '## 飞书消息格式\nWeb 端支持完整 Markdown。',
@@ -416,15 +417,19 @@ describe('channel format guidance', () => {
       channelFormatFor(normalizeChannelTurnContext(undefined, 'web:main')),
     ).toBeUndefined();
     expect(channelFormatFor(undefined)).toBeUndefined();
+    // A team role's own section covers the format.
+    expect(
+      channelFormatFor(feishuContext(), { role: 'router' }),
+    ).toBeUndefined();
   });
 
   test("rides in each turn with that turn's context, never in the system prompt", () => {
     // Cold and warm turns pass the guidance of the context they carry.
     expect(runner).toContain(
-      'channelContext: containerInput.channelContext,\n      channelFormat: channelFormatFor(containerInput.channelContext),',
+      'channelContext: containerInput.channelContext,\n      channelFormat: channelFormatFor(\n        containerInput.channelContext,\n        containerInput.teamRole,\n      ),',
     );
     expect(runner).toContain(
-      'channelContext: queuedChannelContext,\n          channelFormat: channelFormatFor(queuedChannelContext),',
+      'channelContext: queuedChannelContext,\n          channelFormat: channelFormatFor(\n            queuedChannelContext,\n            containerInput.teamRole,\n          ),',
     );
     // The system prompt no longer depends on which channel an input came from.
     const planStart = runner.indexOf(

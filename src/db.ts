@@ -111,6 +111,10 @@ import {
   initAutomationStore,
   migrateLegacyScheduledTasks,
 } from './automation-store.js';
+import {
+  deleteWorkspaceWorkItems,
+  initWorkItemStore,
+} from './work-item-store.js';
 import { keyPrefixRange } from './sql-key-prefix.js';
 import {
   clearAgentSessionHistoryReinjections,
@@ -2552,6 +2556,10 @@ export function initDatabase(
   bindChannelReliabilityDatabase(db);
   initRuntimeStateStore(db);
   initAutomationStore(db);
+  // v86 -> v87: team mode (团队模式). work-item-store.ts owns its tables
+  // (team_mounts, work_items, work_item_subscriptions, work_item_events,
+  // work_decisions); they are new and additive, nothing is backfilled.
+  initWorkItemStore(db);
 
   // v63 -> v64: early Feishu reply enrichment embedded quoted ancestors in
   // messages.content, leaking prompt scaffolding into Web history and then
@@ -9126,10 +9134,36 @@ function channelMountFromRegisteredGroup(
   return null;
 }
 
+let channelMountChangeListener: ((channelJid: string) => void) | null = null;
+
+/**
+ * Called after any change of a channel mount (bind, unbind, rebind, delete),
+ * once the change is committed. Team mode reconciles the group with it.
+ */
+export function setChannelMountChangeListener(
+  listener: ((channelJid: string) => void) | null,
+): void {
+  channelMountChangeListener = listener;
+}
+
+function notifyChannelMountChanged(channelJid: string): void {
+  const listener = channelMountChangeListener;
+  if (!listener) return;
+  // After the surrounding transaction has committed.
+  queueMicrotask(() => {
+    try {
+      listener(channelJid);
+    } catch (error) {
+      logger.warn({ err: error, channelJid }, 'Channel mount listener failed');
+    }
+  });
+}
+
 export function upsertChannelMount(
   mount: Omit<ChannelMount, 'created_at' | 'updated_at'> &
     Partial<Pick<ChannelMount, 'created_at' | 'updated_at'>>,
 ): ChannelMount {
+  notifyChannelMountChanged(mount.channel_jid);
   return db.transaction(() => {
     const now = new Date().toISOString();
     const existing = getChannelMount(mount.channel_jid);
@@ -9181,6 +9215,7 @@ export function upsertChannelMount(
 }
 
 export function deleteChannelMount(channelJid: string): void {
+  notifyChannelMountChanged(channelJid);
   if (!db) return;
   try {
     db.transaction(() => {
@@ -9817,6 +9852,7 @@ export function deleteGroupData(
     // 1. 删除工作区的自动化及其运行记录
     clearFolderRuntimeState(folder, jid);
     deleteWorkspaceAutomations(jid);
+    deleteWorkspaceWorkItems(jid);
     // 2. 删除 workspace -> AgentProfile 归属映射
     prepareCached(
       'DELETE FROM workspace_agent_profiles WHERE group_folder = ?',
@@ -11734,7 +11770,9 @@ function mapAgentRow(row: Record<string, unknown>): SubAgent {
             | 'feishu_thread'
             | 'auto_im'
             | 'channel_direct'
-            | 'automation')
+            | 'automation'
+            | 'team_router'
+            | 'work_item')
         : null,
     thread_id: typeof row.thread_id === 'string' ? row.thread_id : null,
     root_message_id:
@@ -13255,6 +13293,7 @@ export function closeDatabase(): void {
   bindOwnerProfileDatabase(null);
   initRuntimeStateStore(null);
   initAutomationStore(null);
+  initWorkItemStore(null);
   if (db) {
     db.close();
   }

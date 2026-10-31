@@ -60,6 +60,7 @@ import groupRoutes from './routes/groups.js';
 import memoryRoutes from './routes/memory.js';
 import configRoutes, { injectConfigDeps } from './routes/config.js';
 import type { AutomationWsEvent } from './automation-contract.js';
+import type { WorkItemWsEvent } from './work-items.js';
 import tasksRoutes from './routes/tasks.js';
 import automationRoutes from './routes/automations.js';
 import adminRoutes from './routes/admin.js';
@@ -84,6 +85,7 @@ import { usage as usageRoutes } from './routes/usage.js';
 import billingRoutes from './routes/billing.js';
 import bugReportRoutes from './routes/bug-report.js';
 import guestRoutes from './routes/guests.js';
+import workItemRoutes from './routes/work-items.js';
 import { codexGatewayApp } from './codex-gateway/gateway.js';
 import { initCodexCatalogSync } from './codex-gateway/model-catalog-sync.js';
 import { CODEX_GATEWAY_ROUTE } from './codex-gateway/types.js';
@@ -376,6 +378,7 @@ app.route('/api/billing', billingRoutes);
 app.route('/api/bug-report', bugReportRoutes);
 app.route('/api/channel-accounts', channelAccountRoutes);
 app.route('/api/guests', guestRoutes);
+app.route('/api', workItemRoutes); // Team mode: /api/workspaces/:jid/team-mounts|work-items|work-decisions, /api/work-items
 // 不挂在 /api/* 下：网关用 provider gateway token 鉴权（x-api-key），
 // 不是浏览器 Cookie 会话，不需要也不应该套用 /api/* 的 CORS/Cookie 中间件。
 app.route(CODEX_GATEWAY_ROUTE, codexGatewayApp);
@@ -3956,6 +3959,16 @@ export function broadcastAutomationEvent(event: AutomationWsEvent): void {
       ? { ...event, run: redactAutomationRunForGuest(event.run) }
       : event;
   safeBroadcast(guestEvent, false, new Set(guests));
+}
+
+/**
+ * A work item changed. Only the workspace owner sees team mode; guests get
+ * nothing (their allowlist does not include the work item routes either).
+ */
+export function broadcastWorkItemEvent(event: WorkItemWsEvent): void {
+  const ownerId = getRegisteredGroup(event.workspaceJid)?.created_by;
+  if (!ownerId) return;
+  safeBroadcast(event, false, new Set([ownerId]));
 }
 
 export function broadcastWhatsAppStatus(

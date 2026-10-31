@@ -1290,6 +1290,23 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Retire the runner serving `groupJid` once its current query ends (an
+   * idle one now). Until it has exited, no new turn is piped into it: the
+   * next input starts a fresh runner. For a change the runner was started
+   * without, such as an approved work item's restored edit tools.
+   */
+  retireRunnerAfterQuery(groupJid: string): boolean {
+    const runner = this.findActiveRunnerFor(groupJid);
+    if (!runner) return false;
+    const state = this.getGroup(runner);
+    // Keeps a stronger close already decided (reclaim) and the after-exit
+    // clean-up another change registered.
+    state.closing ??= 'after_query';
+    if (!state.queryInFlight) this.closeStdin(runner);
+    return true;
+  }
+
   /** Close `runnerJid` after its current query; idle runners close now. */
   private closeAfterQuery(
     runnerJid: string,

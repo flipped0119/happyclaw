@@ -48,7 +48,7 @@ export type AutomationIpcCall = (
   resultPrefix: string,
 ) => Promise<Record<string, unknown>>;
 
-type ToolResult = {
+export type ToolResult = {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 };
@@ -59,7 +59,7 @@ const SESSION_MODE: Record<AutomationSessionChoice, AutomationSessionMode> = {
   persistent: 'persistent',
 };
 
-function text(value: string, isError = false): ToolResult {
+export function text(value: string, isError = false): ToolResult {
   return {
     content: [{ type: 'text', text: value }],
     ...(isError ? { isError: true } : {}),
@@ -67,7 +67,7 @@ function text(value: string, isError = false): ToolResult {
 }
 
 /** An object that rejects unknown keys, naming the keys it does accept. */
-function strictObject<T extends z.ZodRawShape>(shape: T) {
+export function strictObject<T extends z.ZodRawShape>(shape: T) {
   const usage = `可用参数：${Object.keys(shape).join('、') || '无'}`;
   return z.strictObject(shape, {
     error: (issue) =>
@@ -81,7 +81,7 @@ function strictObject<T extends z.ZodRawShape>(shape: T) {
  * A tool's parameters as a strict object. The SDK accepts an object schema
  * in place of a raw shape; typing it as the shape keeps handler inference.
  */
-function strict<T extends z.ZodRawShape>(shape: T): T {
+export function strict<T extends z.ZodRawShape>(shape: T): T {
   return strictObject(shape) as unknown as T;
 }
 

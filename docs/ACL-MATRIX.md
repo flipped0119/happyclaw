@@ -237,6 +237,23 @@ read-only 投影按 host-issued turn ID 精确匹配当前或已接纳的 queued
 `/api/memory/global` 只要求有效登录，但无论角色均返回 410；它们不提供旧文件读取
 或兼容写入能力。
 
+### 4.7 团队模式
+
+`src/routes/work-items.ts` 只服务工作区主人：URL 中的工作区（或工作项所属工作区）
+必须是 `web:*` 并通过 `canModifyGroup()`（`created_by` 等于当前用户）；Host 工作区另需
+admin。admin 没有跨 owner bypass，不存在与无权限都返回 404。
+
+| 操作                                                           | 主人                         | 其他用户与 admin | 访客 |
+| -------------------------------------------------------------- | ---------------------------- | ---------------- | ---- |
+| `GET /api/workspaces/:jid/team-mounts`                         | 允许                         | 404              | 拒绝 |
+| `PUT /api/workspaces/:jid/team-mounts/:channelJid`             | 允许，群必须是该工作区的绑定 | 404              | 拒绝 |
+| `GET /api/workspaces/:jid/work-items`、`work-decisions`        | 允许                         | 404              | 拒绝 |
+| `GET /api/work-items?needs=me`                                 | 只含自己工作区的工作项       | 只含自己的       | 拒绝 |
+| `GET /api/work-items/:id`、`POST .../stop`、`POST .../approve` | 允许                         | 404              | 拒绝 |
+
+访客拒绝是 403：guest guard 的放行清单不含这些路由，处理器也再拒绝一次。工作项事件
+`work_item_updated` 只推给工作区主人。
+
 ## 5. 工作区与 Session 渠道绑定
 
 写操作统一要求目标工作区 Modify，同时校验 IM Chat 属于同一用户、同一渠道账号，

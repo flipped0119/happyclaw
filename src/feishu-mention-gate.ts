@@ -44,6 +44,8 @@ export interface MentionGateInput {
   conversationPlan?: {
     disabled: boolean;
     allowWithoutMention: boolean;
+    /** The plan admitted the message nowhere, whatever its @. */
+    rejectReason?: 'not_admitted';
   };
   /**
    * 来自 happyclaw 主进程：根据该群 activation_mode / require_mention
@@ -70,7 +72,9 @@ export type MentionGateRejectReason =
   /** 该群配置要求 @bot 但本条消息没 @ */
   | 'not_mentioned'
   /** owner_mentioned 模式下 bot 被 @ 了但 sender 不是 owner */
-  | 'not_owner';
+  | 'not_owner'
+  /** The conversation plan admitted it nowhere (team mode, for one). */
+  | 'not_admitted';
 
 export type MentionGateDecision =
   | { allow: true }
@@ -133,6 +137,9 @@ export function evaluateMentionGate(
 ): MentionGateDecision {
   if (input.conversationPlan?.disabled) {
     return { allow: false, reason: 'disabled' };
+  }
+  if (input.conversationPlan?.rejectReason) {
+    return { allow: false, reason: input.conversationPlan.rejectReason };
   }
   if (
     input.chatType !== 'group' ||

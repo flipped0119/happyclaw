@@ -14,6 +14,8 @@ import { SettingsGroup, SettingsSection } from './SettingsLayout';
 import { useImBindings } from './hooks/useImBindings';
 import { ImBindingRow } from './ImBindingRow';
 import { BindingTargetDialog } from './BindingTargetDialog';
+import { TeamModeDialog } from '../team/TeamModeDialog';
+import { teamModeWorkspaceOf } from '../../lib/team-mode';
 import { api } from '../../api/client';
 import type { AvailableImGroup } from '../../types';
 import type { BindingTarget } from './hooks/useImBindings';
@@ -64,6 +66,8 @@ export function BindingsSection() {
   const [resetAllowlistGroup, setResetAllowlistGroup] =
     useState<AvailableImGroup | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<AvailableImGroup | null>(null);
+  const [teamGroup, setTeamGroup] = useState<AvailableImGroup | null>(null);
+  const teamWorkspaceJid = teamGroup && teamModeWorkspaceOf(teamGroup);
 
   const channels: { key: ChannelFilter; label: string; count: number }[] =
     useMemo(() => {
@@ -484,6 +488,7 @@ export function BindingsSection() {
                         onActivationModeChange={handleActivationModeChange}
                         onAudienceModeChange={handleAudienceModeChange}
                         onDelete={handleDelete}
+                        onTeamMode={setTeamGroup}
                       />
                     ))}
                   </ListGroup>
@@ -493,6 +498,15 @@ export function BindingsSection() {
           </div>
         )}
       </SettingsSection>
+
+      {teamGroup && teamWorkspaceJid && (
+        <TeamModeDialog
+          workspaceJid={teamWorkspaceJid}
+          channelJid={teamGroup.jid}
+          channelName={teamGroup.name}
+          onClose={() => setTeamGroup(null)}
+        />
+      )}
 
       {/* Rebind target dialog */}
       <BindingTargetDialog

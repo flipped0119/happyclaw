@@ -28,6 +28,8 @@ import {
   formatFreshWindowHandoff,
 } from './fresh-window.js';
 import { createAutomationTools } from './automation-tools.js';
+import { createWorkTools } from './work-tools.js';
+import { teamLaneWithholdsTool, type TeamRole } from './work-items.js';
 
 /** Context required by MCP tools. Passed at construction time. */
 export interface McpContext {
@@ -43,6 +45,8 @@ export interface McpContext {
   ownerProfileEnabled: boolean;
   /** Public reply contract selected by the workspace. */
   interactionMode?: 'assistant' | 'proactive';
+  /** Team mode role: replaces the posting tools with the role's work tools. */
+  teamRole?: TeamRole;
   /** Mutable correlation id for the user input currently being answered.
    * Cold starts use the triggering message id; IPC turns use the host-issued
    * delivery id from their receipt. */
@@ -2312,7 +2316,27 @@ Use the skills panel in the UI to find the skill ID (directory name, e.g. "memor
     ),
   );
 
-  return applyToolLoadingHints(tools);
+  return applyToolLoadingHints(
+    ctx.teamRole ? withTeamTools(tools, ctx.teamRole, ctx) : tools,
+  );
+}
+
+/**
+ * A team-mode session speaks only through its work tools: the router posts
+ * with `work_reply`, a worker acknowledges with `work_ack`.
+ */
+function withTeamTools(
+  tools: SdkMcpToolDefinition<any>[],
+  teamRole: TeamRole,
+  ctx: McpContext,
+): SdkMcpToolDefinition<any>[] {
+  const tasksDir = path.join(ctx.workspaceIpc, 'tasks');
+  return [
+    ...tools.filter((definition) => !teamLaneWithholdsTool(definition.name)),
+    ...createWorkTools(teamRole, (request, resultPrefix, timeoutMs) =>
+      pollIpcResult(tasksDir, request, resultPrefix, timeoutMs),
+    ),
+  ];
 }
 
 const UNTRUSTED_CHANNEL_LABELS = {
@@ -2362,6 +2386,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'agent_capability_catalog',
   'workspace_memory_search',
   'workspace_memory_get',
+  'work_list',
 ]);
 
 /**
@@ -2374,6 +2399,11 @@ const ALWAYS_LOADED_TOOL_NAMES = new Set([
   'get_channel_context',
   'workspace_memory_search',
   'workspace_memory_get',
+  // Team mode only: the tools a router or worker turn always ends with.
+  'work_route',
+  'work_reply',
+  'work_report',
+  'work_ack',
 ]);
 
 /** The same hints `tool(name, ..., { annotations, alwaysLoad })` would set. */

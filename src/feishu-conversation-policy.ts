@@ -1,3 +1,5 @@
+import type { ChannelMessageMeta } from './types.js';
+
 export type FeishuActivationMode =
   | 'auto'
   | 'always'
@@ -23,17 +25,36 @@ export interface FeishuConversationPolicyInput {
   activeContext?: ActiveFeishuContext;
 }
 
+export interface FeishuTeamPlan {
+  outcome: 'subscribed' | 'candidate' | 'ignore';
+  /** The lane the message goes to, or `reject`; carried on the routed meta. */
+  route: NonNullable<ChannelMessageMeta['teamRoute']>;
+  /**
+   * The hidden header item the stored message carries (see team-gate.ts),
+   * as an attachments-JSON entry. Absent for `ignore`.
+   */
+  inputItem?: unknown;
+}
+
 export interface FeishuConversationPlan {
   /** A hard stop that cannot be bypassed by mentioning the bot. */
   disabled: boolean;
   /** Whether a group message may pass without mentioning the bot. */
   allowWithoutMention: boolean;
+  /** Admitted nowhere, whatever its @ (team mode ignored it). */
+  rejectReason?: 'not_admitted';
   /** Whether this message belongs to an isolated conversation agent. */
   independentContext: boolean;
   /** Canonical, durable context identity used by im_context_bindings. */
   contextId?: string;
   /** Topic root used as the reply_in_thread anchor of an independent context. */
   rootMessageId?: string;
+  /**
+   * Team mode (团队模式) decided where this group message goes. The decision
+   * replaces the @ requirement (allowWithoutMention / rejectReason). Absent
+   * outside team mode.
+   */
+  team?: FeishuTeamPlan;
   reason:
     | 'disabled'
     | 'direct'

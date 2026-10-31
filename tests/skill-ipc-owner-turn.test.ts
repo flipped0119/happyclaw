@@ -95,6 +95,34 @@ describe('install_skill / uninstall_skill only from the owner’s own turn', () 
     expect(SKILL_MUTATION_NON_OWNER_REJECTION).toContain('工作区主人');
   });
 
+  test('a team-mode input the host composed never counts as the owner', () => {
+    // Even carrying the owner's sender and source, a host-composed team input
+    // (assignment, follow-up copy, report) is unattended.
+    const composed = input(OWNER, WEB_JID, { source_kind: 'work_item_input' });
+    expect(check({ m1: composed })).toBe(SKILL_MUTATION_NON_OWNER_REJECTION);
+    expect(
+      check({ m1: input(OWNER, WEB_JID), m2: composed }, { agentId: 'w-1' }),
+    ).toBe(SKILL_MUTATION_NON_OWNER_REJECTION);
+    // Workspace Memory classifies the turn as unattended, so a write only
+    // proposes.
+    const registry = new AgentBuilderTurnRegistry();
+    const scope = agentBuilderTurnScope(FOLDER, 'w-1');
+    registry.startBatch(scope, [
+      {
+        chatJid: WEB_JID,
+        messageId: 'm1',
+        runtimeTurnId: 'm1',
+        automationRunId: null,
+      },
+    ]);
+    expect(registry.classifyActiveTurn(scope, 'm1', () => composed)).toBe(
+      'automation',
+    );
+    expect(
+      registry.classifyActiveTurn(scope, 'm1', () => input(OWNER, WEB_JID)),
+    ).toBe('interactive');
+  });
+
   test('an owner claimed only by /owner_mention is not trusted', () => {
     groups['feishu:oc_claimed'] = {
       created_by: OWNER,

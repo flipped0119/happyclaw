@@ -33,7 +33,8 @@ Agent Profile（身份、四段 Prompt、能力策略）
     ├── Main Session（可绑定私聊或普通群）
     ├── Runtime Session（独立 Claude 上下文，可绑定私聊或普通群；Host 工作区可选独立 git worktree）
     ├── Native Context Session（飞书话题等原生线程）
-    └── Automation（自动化：按计划把提示词作为真实的一轮发进会话）
+    ├── Automation（自动化：按计划把提示词作为真实的一轮发进会话）
+    └── Work Item（团队模式的工作项：一件被授权的工作，由自己的执行会话完成）
 ```
 
 重要命名边界：
@@ -52,6 +53,12 @@ Agent Profile（身份、四段 Prompt、能力策略）
   每轮以它为 cwd，文件面板、项目 Skills 和 Review 面板也以它为根。worktree 缺失或损坏时
   运行失败，不回退到主仓库；删除会话时移除 worktree、保留分支，有未提交改动或已初始化的
   子模块时须确认。同一目录上同时有别的会话在跑时，对话页提示但不阻塞。
+- 团队模式（Team mode）按群开启（v1 只支持绑定在工作区主会话上的飞书普通群），关闭时
+  任何行为不变。开启后，宿主为该群建一个路由会话（`source_kind='team_router'`，不是主会话），
+  每个被接下的请求成为一个工作项（`work_items`），由它自己的执行会话
+  （`source_kind='work_item'`；Host 工作区的 git 仓库用 worktree 会话）完成。只有路由会话在群里
+  说话；执行会话只能发一次确认，结果经 `work_report` 回流给路由会话。工作项的阶段
+  （等你回答、等你批准、受阻、失败、工作中、等待新消息）由记录派生，不存储。
 
 ## 3. 主要模块
 
@@ -76,6 +83,9 @@ Agent Profile（身份、四段 Prompt、能力策略）
 | `src/automation-scheduler.ts`      | 自动化的到期触发、前置检查、错过与重启恢复             |
 | `src/automation-service.ts`        | 自动化的校验、权限，REST 与 Agent 工具共用             |
 | `src/memory-service.ts`            | Workspace Memory 召回、目录、提议与审计                |
+| `src/team-gate.ts`                 | 团队模式入站：订阅键、名单与 @ 判定、准入表            |
+| `src/work-item-service.ts`         | 工作项的路由、生命周期、回复门控，REST 与 IPC 共用     |
+| `src/work-item-runtime.ts`         | 团队输入注入各 lane、团队回复经 Outbox 投递            |
 
 渠道实现位于：
 
@@ -105,6 +115,7 @@ Radix UI。路由以 `web/src/App.tsx` 为准：
 | `/agent-profiles`         | Agent 管理                            |
 | `/capabilities/:section?` | Skills、MCP、Plugins                  |
 | `/automations`            | 自动化                                |
+| `/work/:itemId?`          | 团队模式的工作项与「需要我处理」      |
 | `/usage`、`/billing`      | 用量与计费                            |
 | `/memory`                 | 记忆管理                              |
 | `/settings`               | 账户和系统设置                        |
@@ -255,7 +266,8 @@ preset 的身份和默认风格，只低于平台的安全、权限、工具和�
 
 规则：
 
-- Agent 工具权限保持开放；不要虚构只读或受限工具模式。唯一例外是 Claude Code
+- Agent 工具权限保持开放；不要虚构只读或受限工具模式。团队模式的路由与执行会话按角色收紧
+  工具（见 §6.3），这是渠道发言规则，不是通用的受限模式。另一例外是 Claude Code
   内置、依赖 CLI 进程常驻或交互审批的会话级工具（`CronCreate`/`CronDelete`/`CronList`、
   `ScheduleWakeup`、`EnterWorktree`/`ExitWorktree`、`EnterPlanMode`/`ExitPlanMode`）：
   Runner 每轮结束会关闭 CLI，这些承诺会静默丢失，计划模式也等不到审批，因此默认禁用，
@@ -381,6 +393,28 @@ preset 的身份和默认风格，只低于平台的安全、权限、工具和�
   不会为普通群新建话题 Session，也不会把它变成工作区绑定。
 - 引用回复（带 root_id 但没有 thread_id，私聊同样）在主聊天作答，不在被引用消息下
   开话题；被引用内容作为引用上下文交给 Agent。普通群里真实话题内的消息仍回到该话题。
+
+开启团队模式的普通群（`team_mounts`）：
+
+- 每条消息三选一。所在回复链或话题被工作项订阅（`msg:<父/根消息 id>`、`thread:<话题 id>`）
+  时直接进该工作项的执行会话，不经路由、不需要 @，多个工作项订阅时其余各得一份副本；已结束
+  而不是被人停止的工作项被人的消息复活。否则按准入表判定：名单（owner 加群白名单）内的人
+  @ 机器人（或回复机器人的消息）是明确请求，其余格子由准入表决定是推断候选还是忽略；推断候选
+  只在接单方式不是 `off` 且至少启用一条规则时产生，机器人消息不进入。候选进路由会话，忽略的
+  消息与激活未通过时相同。`audience_mode` 仍是最外层边界。
+- 路由会话用 `work_route` 接单、挂到已有工作项、停止或忽略。推断候选必须逐条判断启用规则；
+  `observe` 下接单只记成 `would_accept`，`auto` 下才开工作项。授权（mandate）记录发起人、强度、
+  命中规则与设置版本；推断或名单外发起的工作项只读，owner 在 Web 批准后才可修改。只读靠禁用
+  Edit/Write/NotebookEdit 和提示词，Bash 仍可用，不是安全边界。
+- 群里只有路由会话通过 `work_reply` 说话（`result`、`attention`、`answer`，各有前置条件），
+  执行会话只能用 `work_ack` 对每个触发确认一次。团队消息都以引用方式回复原消息
+  （`reply_in_thread=false`）、经 Outbox 投递，单条不超过 100 词（`countImWords`，中文按字），
+  超出时退回模型重写。宿主发出的每条机器人消息都订阅给对应工作项，回复它就能接着说。
+- 路由会话与执行会话以主动模式运行，不注册 `send_message`、`send_file`、`send_image`、
+  `feishu_send_card`、`feishu_api_request`，宿主也拒绝这些请求；AskUserQuestion 对两者禁用。
+  宿主合成的团队输入（`source_kind='work_item_input'`）永远不算 owner 亲自发起的轮次。
+- 在已订阅的话题里 `/break` 停的是该工作项执行会话的当前轮次，不是工作项；停止工作项走路由
+  会话或 Web。
 
 飞书话题群：
 
@@ -529,13 +563,15 @@ data/
   执行轨迹与有序步骤，按 `(chat_jid, turn_id)` 存放，随消息一起清理）、
   `usage_limit_waits`、`web_message_dedup`（Web 发送的幂等键，保留 24 小时）
 - 自动化：`automations`、`automation_runs`、`automation_failure_streaks`
+- 团队模式：`team_mounts`、`work_items`、`work_item_subscriptions`、`work_item_events`、
+  `work_decisions`
 - 记忆：`workspace_memory_*`（含召回索引 `workspace_memory_recall_fts`）
 - 用量与计费：`usage_records`、`usage_events`、`usage_daily_summary`、
   `usage_event_connections` 及 `billing_*`、订阅、余额和兑换码相关表
 
 Channel Reliability 的 Inbox/Turn/Outbox/Card 表由
 `src/channel-reliability-store.ts` 在同一数据库连接上创建；同样，`session_worktrees` 由
-`src/session-worktree-store.ts`，自动化表由 `src/automation-store.ts`，等待、补注、用量连接
+`src/session-worktree-store.ts`，自动化表由 `src/automation-store.ts`，团队模式表由 `src/work-item-store.ts`，等待、补注、用量连接
 和 Web 发送去重表由 `src/runtime-state-store.ts` 创建。
 
 ## 8. 认证与权限

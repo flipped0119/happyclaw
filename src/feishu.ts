@@ -98,6 +98,7 @@ import {
   type IncomingMessagePayload,
 } from './feishu-intake-message.js';
 import type { FeishuConversationPlan } from './feishu-conversation-policy.js';
+import { withTeamInputAttachment, type TeamInputItem } from './team-gate.js';
 import {
   isRuntimeControlLike,
   parseRuntimeControl,
@@ -1154,6 +1155,9 @@ function planFeishuRoute(
   const inThread = !!plan?.independentContext || !!threadId;
   const routedMeta: FeishuMessageMeta = {
     ...meta,
+    // Team mode decided the lane with the message as it arrived (its root
+    // included); the router uses that decision as is.
+    ...(plan?.team ? { teamRoute: plan.team.route } : {}),
     nativeContextType:
       plan?.independentContext || (!plan && !!threadId) ? 'thread' : undefined,
     contextId: plan?.contextId || threadId,
@@ -3469,6 +3473,8 @@ export function createFeishuConnection(
         parentId,
         messageId,
         text,
+        senderImId: senderOpenId || undefined,
+        senderIsBot: !!senderType && senderType !== 'user',
       };
       const conversationPlan = resolveFeishuConversationPlan?.(
         chatJid,
@@ -3687,6 +3693,10 @@ export function createFeishuConnection(
               // thread/topic target. A first-contact P2P route is deliberately
               // left for the host fallback so command handling never bypasses
               // the normal P2P bootstrap below.
+              // In a team-mode group the route follows the team decision: on a
+              // thread a work item subscribes, `/break` stops the current turn
+              // of that item's worker session. The work item itself stays open;
+              // only a person's stop (Web, or the router's `stop`) ends it.
               if (chatType === 'group' && resolveEffectiveChatJid) {
                 try {
                   targetJid = resolveEffectiveChatJid(
@@ -3943,6 +3953,11 @@ export function createFeishuConnection(
             logger.debug(
               { chatJid, messageId },
               'Dropped group message: mention required but bot not mentioned',
+            );
+          } else if (decision.reason === 'not_admitted') {
+            logger.debug(
+              { chatJid, messageId },
+              'Dropped group message: its conversation plan admitted it nowhere',
             );
           } else if (decision.reason === 'not_owner') {
             logger.debug(
@@ -4662,6 +4677,15 @@ export function createFeishuConnection(
         // after the durable chat tail; its original provider time remains in
         // the rendered forwarded material/context rather than cursor order.
         timestamp = sequenceInboundTimestampAfterChatTail(targetJid, timestamp);
+      }
+      // Team mode: the lane reads this message with its header (candidate or
+      // follow-up), stored beside its images as a hidden attachment item.
+      const teamInputItem = conversationPlan?.team?.inputItem;
+      if (teamInputItem) {
+        attachmentsJson = withTeamInputAttachment(
+          attachmentsJson,
+          teamInputItem as TeamInputItem,
+        );
       }
       storeChatMetadata(targetJid, timestamp);
       storeMessageDirect(

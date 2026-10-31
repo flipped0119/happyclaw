@@ -32,6 +32,16 @@ export interface ChannelInboundRoutingDeps {
     group: RegisteredGroup,
     thread: NativeThreadContext,
   ) => { effectiveJid: string; agentId: string; sourceJid: string } | null;
+  /**
+   * Team mode (团队模式): the lane the gate chose for this message of a
+   * team-mode group mount (a work item's worker or the group's router),
+   * `reject` when no lane takes it (never the main session), or null when
+   * the group is not in team mode.
+   */
+  resolveTeamRoute?: (
+    chatJid: string,
+    messageMeta: ChannelMessageMeta | undefined,
+  ) => { effectiveJid: string; agentId: string } | 'reject' | null;
 }
 
 export function hasExplicitChannelBinding(
@@ -121,6 +131,9 @@ export function createChannelInboundRouter(deps: ChannelInboundRoutingDeps): (
           'resolveEffectiveChatJid: channel_mounts workspace differs from session owner, using session owner workspace',
         );
       }
+      const teamRoute = deps.resolveTeamRoute?.(chatJid, messageMeta);
+      if (teamRoute === 'reject') return null;
+      if (teamRoute) return teamRoute;
       if (mountedTarget.agentId) {
         return {
           effectiveJid: mountedTarget.effectiveJid,

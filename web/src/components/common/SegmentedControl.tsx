@@ -20,6 +20,7 @@ export interface SegmentedControlProps<V extends string = string> {
   options: SegmentedOption<V>[];
   onChange: (value: V) => void;
   size?: 'sm' | 'default';
+  disabled?: boolean;
   className?: string;
 }
 
@@ -78,6 +79,7 @@ export function SegmentedControl<V extends string = string>({
   options,
   onChange,
   size = 'default',
+  disabled = false,
   className,
 }: SegmentedControlProps<V>) {
   // When the options overflow (narrow phones), the clipped edge fades out so
@@ -109,9 +111,10 @@ export function SegmentedControl<V extends string = string>({
             key={option.value}
             type="button"
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
             className={cn(
-              'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 font-medium whitespace-nowrap transition-colors duration-100 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:min-h-11',
+              'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 font-medium whitespace-nowrap transition-colors duration-100 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11',
               size === 'sm' ? 'h-6 text-caption' : 'h-7 text-label',
               active
                 ? 'bg-background text-foreground shadow-xs ring-1 ring-surface-border dark:bg-surface-selected'

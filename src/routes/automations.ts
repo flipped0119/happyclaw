@@ -6,8 +6,7 @@
 // Read-only guests act as `viewer`s of the workspaces they are granted; the
 // guest guard lets them reach only the list and detail reads.
 
-import { Hono, type Context } from 'hono';
-import type { ZodType } from 'zod';
+import { Hono } from 'hono';
 
 import {
   AutomationError,
@@ -15,7 +14,6 @@ import {
   type AutomationService,
   type AutomationSessionDisposal,
 } from '../automation-contract.js';
-import { logger } from '../logger.js';
 import { authMiddleware } from '../middleware/auth.js';
 import {
   AutomationCreateSchema,
@@ -25,6 +23,13 @@ import {
 import { listActiveGuestGrantJids } from '../db.js';
 import type { AuthUser } from '../types.js';
 import type { Variables } from '../web-context.js';
+import {
+  errorBoundary,
+  param,
+  parseLimit,
+  readBody,
+  type RouteContext,
+} from '../route-helpers.js';
 
 let automationService: AutomationService | null = null;
 
@@ -36,61 +41,23 @@ export function setAutomationService(service: AutomationService | null): void {
 const automationRoutes = new Hono<{ Variables: Variables }>();
 automationRoutes.use('*', authMiddleware);
 
-function actorOf(c: Context<{ Variables: Variables }>): AutomationActor {
+function actorOf(c: RouteContext): AutomationActor {
   const user = c.get('user') as AuthUser;
   if (user.role === 'guest')
     return { kind: 'viewer', workspaceJids: listActiveGuestGrantJids(user.id) };
   return { kind: 'web', userId: user.id, isAdmin: user.role === 'admin' };
 }
 
-async function readBody<T>(
-  c: Context<{ Variables: Variables }>,
-  schema: ZodType<T>,
-): Promise<T> {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    body = undefined;
-  }
-  const parsed = schema.safeParse(body ?? {});
-  if (!parsed.success) throw new AutomationError(400, '请求格式不正确');
-  return parsed.data;
-}
-
-type Handler = (
-  c: Context<{ Variables: Variables }>,
-  service: AutomationService,
-) => Promise<Response> | Response;
+const invalidBody = () => new AutomationError(400, '请求格式不正确');
 
 /** Resolve the service and map AutomationError to `{ error }`. */
-function handle(handler: Handler) {
-  return async (c: Context<{ Variables: Variables }>) => {
-    if (!automationService)
-      return c.json({ error: '自动化服务尚未就绪，请稍后重试' }, 503);
-    try {
-      return await handler(c, automationService);
-    } catch (error) {
-      if (error instanceof AutomationError)
-        return c.json({ error: error.message }, error.status);
-      logger.error(
-        { err: error, path: c.req.path },
-        'Automation request failed',
-      );
-      return c.json({ error: '操作失败，请稍后重试' }, 500);
-    }
-  };
-}
-
-function param(c: Context<{ Variables: Variables }>, name: string): string {
-  return c.req.param(name) ?? '';
-}
-
-function parseLimit(raw: string | undefined): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : undefined;
-}
+const handle = errorBoundary<AutomationService>({
+  resolve: (c) =>
+    automationService ??
+    c.json({ error: '自动化服务尚未就绪，请稍后重试' }, 503),
+  isRefusal: (error) => error instanceof AutomationError,
+  failureLog: 'Automation request failed',
+});
 
 automationRoutes.get(
   '/',
@@ -105,7 +72,7 @@ automationRoutes.get(
 automationRoutes.post(
   '/',
   handle(async (c, service) => {
-    const input = await readBody(c, AutomationCreateSchema);
+    const input = await readBody(c, AutomationCreateSchema, invalidBody);
     return c.json({ automation: service.create(actorOf(c), input) }, 201);
   }),
 );
@@ -142,6 +109,7 @@ automationRoutes.patch(
     const { expectedRevision, ...patch } = await readBody(
       c,
       AutomationPatchSchema,
+      invalidBody,
     );
     return c.json({
       automation: service.update(
@@ -212,7 +180,7 @@ automationRoutes.get(
 automationRoutes.post(
   '/:id/runs/read',
   handle(async (c, service) => {
-    const { runIds } = await readBody(c, AutomationMarkReadSchema);
+    const { runIds } = await readBody(c, AutomationMarkReadSchema, invalidBody);
     service.markRunsRead(actorOf(c), param(c, 'id'), runIds);
     return c.body(null, 204);
   }),
