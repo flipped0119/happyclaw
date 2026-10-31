@@ -9134,10 +9134,36 @@ function channelMountFromRegisteredGroup(
   return null;
 }
 
+let channelMountChangeListener: ((channelJid: string) => void) | null = null;
+
+/**
+ * Called after any change of a channel mount (bind, unbind, rebind, delete),
+ * once the change is committed. Team mode reconciles the group with it.
+ */
+export function setChannelMountChangeListener(
+  listener: ((channelJid: string) => void) | null,
+): void {
+  channelMountChangeListener = listener;
+}
+
+function notifyChannelMountChanged(channelJid: string): void {
+  const listener = channelMountChangeListener;
+  if (!listener) return;
+  // After the surrounding transaction has committed.
+  queueMicrotask(() => {
+    try {
+      listener(channelJid);
+    } catch (error) {
+      logger.warn({ err: error, channelJid }, 'Channel mount listener failed');
+    }
+  });
+}
+
 export function upsertChannelMount(
   mount: Omit<ChannelMount, 'created_at' | 'updated_at'> &
     Partial<Pick<ChannelMount, 'created_at' | 'updated_at'>>,
 ): ChannelMount {
+  notifyChannelMountChanged(mount.channel_jid);
   return db.transaction(() => {
     const now = new Date().toISOString();
     const existing = getChannelMount(mount.channel_jid);
@@ -9189,6 +9215,7 @@ export function upsertChannelMount(
 }
 
 export function deleteChannelMount(channelJid: string): void {
+  notifyChannelMountChanged(channelJid);
   if (!db) return;
   try {
     db.transaction(() => {

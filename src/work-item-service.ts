@@ -345,9 +345,11 @@ function resumeItem(item: WorkItem, triggerMessageId: string): WorkItem {
     outcome: null,
     endedAt: null,
   });
+  // The outcome it had, so a hand-back of this message can restore it.
   recordWorkEvent({
     workItemId: item.id,
     kind: 'resume',
+    state: item.outcome,
     triggerMessageId,
     now: now(),
   });
@@ -576,6 +578,31 @@ export function mayRunTeamMode(channelJid: string): boolean {
   return (
     channelJid.startsWith('feishu:') &&
     getTeamMount(channelJid)?.settings.enabled === true
+  );
+}
+
+/**
+ * Whether a lane chosen for a message of `channelJid` is still where it
+ * goes: team mode on, a router lane still the group's router, a worker lane
+ * still a live, not stopped item of the group. `reject` holds while team
+ * mode is on.
+ */
+export function teamRouteStillHolds(
+  channelJid: string,
+  route: { effectiveJid: string; agentId: string } | 'reject',
+): boolean {
+  if (!mayRunTeamMode(channelJid)) return false;
+  if (route === 'reject') return true;
+  const context = resolveTeamGroup(channelJid);
+  if (!context) return false;
+  if (route.agentId === context.routerAgentId) return true;
+  const item = getWorkItemByAgent(route.agentId);
+  return (
+    !!item &&
+    item.channelJid === channelJid &&
+    item.workspaceJid === context.workspaceJid &&
+    item.outcome !== 'stopped' &&
+    hasWorkerSession(item)
   );
 }
 
@@ -1981,8 +2008,45 @@ function handleWorkHandback(
       handback: { item, reason },
     }),
   });
-  broadcast(getWorkItem(item.id) ?? item);
+  broadcast(restoreIfOnlyResumedBy(getWorkItem(item.id) ?? item, trigger));
   return {};
+}
+
+/**
+ * An ended item a message resumed, and whose worker handed exactly that
+ * message back without reporting or receiving anything else, ends again as
+ * it was: nothing about it changed.
+ */
+function restoreIfOnlyResumedBy(item: WorkItem, trigger: string): WorkItem {
+  if (item.status !== 'open') return item;
+  const events = listWorkEvents(item.id, 200);
+  let resumeIndex = -1;
+  events.forEach((event, index) => {
+    if (event.kind === 'resume') resumeIndex = index;
+  });
+  const resume = events[resumeIndex];
+  if (!resume || resume.triggerMessageId !== trigger) return item;
+  const outcome = resume.state as WorkItem['outcome'];
+  if (outcome !== 'completed' && outcome !== 'dropped') return item;
+  const since = events.slice(resumeIndex + 1);
+  if (
+    since.some(
+      (event) =>
+        event.kind === 'report' ||
+        (event.kind === 'input' && event.triggerMessageId !== trigger),
+    )
+  ) {
+    return item;
+  }
+  recordWorkEvent({
+    workItemId: item.id,
+    kind: 'resume',
+    state: 'undone',
+    text: 'The message that resumed it was handed back.',
+    triggerMessageId: trigger,
+    now: now(),
+  });
+  return endItem(item, outcome);
 }
 
 /** Run one team tool call; never throws. */

@@ -1299,7 +1299,11 @@ export class GroupQueue {
   retireRunnerAfterQuery(groupJid: string): boolean {
     const runner = this.findActiveRunnerFor(groupJid);
     if (!runner) return false;
-    this.closeAfterQuery(runner, () => {});
+    const state = this.getGroup(runner);
+    // Keeps a stronger close already decided (reclaim) and the after-exit
+    // clean-up another change registered.
+    state.closing ??= 'after_query';
+    if (!state.queryInFlight) this.closeStdin(runner);
     return true;
   }
 
