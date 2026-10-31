@@ -50,6 +50,14 @@ export interface HappyClawPromptSources {
     text: string;
   };
   agentBuilder?: string;
+  /**
+   * Team mode: the router's or the worker's contract. It takes the place of
+   * the delivery contract, which is built on send_message.
+   */
+  team?: {
+    id: 'team-router' | 'team-worker';
+    text: string;
+  };
   output: string;
   web?: string;
   backgroundTasks?: string;
@@ -162,6 +170,14 @@ const ENGINE_CONDITIONS: Record<
   'runtime-baseline': 'Claude Code preset is not included',
 };
 
+const TEAM_CONDITIONS: Record<
+  NonNullable<HappyClawPromptSources['team']>['id'],
+  string
+> = {
+  'team-router': 'team mode router session',
+  'team-worker': 'team mode worker session',
+};
+
 function wrap(tag: string, text: string): string {
   if (!text.trim()) return '';
   return `<${tag}>\n${text}\n</${tag}>`;
@@ -266,6 +282,18 @@ export function buildHappyClawPromptPlan(
       required: false,
       condition: 'interactive default AgentProfile with Agent Builder enabled',
       text: wrap('agent-builder', sources.agentBuilder),
+    });
+  }
+
+  if (sources.team) {
+    inputs.push({
+      id: sources.team.id,
+      version: 1,
+      scope: 'main',
+      owner: 'platform',
+      required: true,
+      condition: TEAM_CONDITIONS[sources.team.id],
+      text: wrap(sources.team.id, sources.team.text),
     });
   }
 
