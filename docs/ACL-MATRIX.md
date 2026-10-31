@@ -240,7 +240,7 @@ read-only 投影按 host-issued turn ID 精确匹配当前或已接纳的 queued
 ### 4.7 团队模式
 
 `src/routes/work-items.ts` 只服务工作区主人：URL 中的工作区（或工作项所属工作区）
-必须是 `web:*`、`created_by` 等于当前用户并通过 `canAccessGroup()`；Host 工作区另需
+必须是 `web:*` 并通过 `canModifyGroup()`（`created_by` 等于当前用户）；Host 工作区另需
 admin。admin 没有跨 owner bypass，不存在与无权限都返回 404。
 
 | 操作                                                           | 主人                         | 其他用户与 admin | 访客 |

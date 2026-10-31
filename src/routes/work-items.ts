@@ -7,12 +7,11 @@
 // other users' workspaces and items answer 404, and guests are refused both
 // by the guest guard (no allowlist entry) and here.
 
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 
 import { getGroupsByOwner, getRegisteredGroup } from '../db.js';
-import { canAccessGroup } from '../group-acl.js';
+import { canModifyGroup } from '../group-acl.js';
 import { GUEST_READ_ONLY_ERROR } from '../guest-access.js';
-import { logger } from '../logger.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { TeamSettingsBodySchema } from '../schemas.js';
 import type { AuthUser, RegisteredGroup } from '../types.js';
@@ -21,6 +20,12 @@ import {
   isHostExecutionGroup,
   type Variables,
 } from '../web-context.js';
+import {
+  errorBoundary,
+  param,
+  parseLimit,
+  readBody,
+} from '../route-helpers.js';
 import {
   approveWorkItem,
   getWorkItemDetail,
@@ -33,8 +38,6 @@ import {
   type WorkItemActor,
 } from '../work-item-service.js';
 import { stageNeedsPerson, type WorkDecisionKind } from '../work-items.js';
-
-type AppContext = Context<{ Variables: Variables }>;
 
 const workItemRoutes = new Hono<{ Variables: Variables }>();
 
@@ -58,8 +61,7 @@ function ownedWorkspace(
   const group = getRegisteredGroup(jid);
   if (!group) return null;
   const workspace = { ...group, jid };
-  if (group.created_by !== user.id || !canAccessGroup(user, workspace))
-    return null;
+  if (!canModifyGroup(user, workspace)) return null;
   if (isHostExecutionGroup(group) && !hasHostExecutionPermission(user))
     return null;
   return workspace;
@@ -69,45 +71,23 @@ function actorOf(user: AuthUser): WorkItemActor {
   return { userId: user.id, isAdmin: user.role === 'admin' };
 }
 
-type Handler = (c: AppContext, user: AuthUser) => Promise<Response> | Response;
-
 /** Refuse guests and map WorkItemError to `{ error }` with its status. */
-function handle(handler: Handler) {
-  return async (c: AppContext) => {
+const handle = errorBoundary<AuthUser>({
+  resolve: (c) => {
     const user = c.get('user') as AuthUser;
-    if (user.role === 'guest')
-      return c.json({ error: GUEST_READ_ONLY_ERROR }, 403);
-    try {
-      return await handler(c, user);
-    } catch (error) {
-      if (error instanceof WorkItemError)
-        return c.json({ error: error.message }, error.status);
-      logger.error(
-        { err: error, path: c.req.path },
-        'Work item request failed',
-      );
-      return c.json({ error: '操作失败，请稍后重试' }, 500);
-    }
-  };
-}
+    return user.role === 'guest'
+      ? c.json({ error: GUEST_READ_ONLY_ERROR }, 403)
+      : user;
+  },
+  isRefusal: (error) => error instanceof WorkItemError,
+  failureLog: 'Work item request failed',
+});
 
 /** Resolve `:id` to a work item in one of the caller's workspaces. */
 function ownedItemDetail(user: AuthUser, id: string) {
   const detail = getWorkItemDetail(id);
   if (!detail || !ownedWorkspace(user, detail.item.workspaceJid)) return null;
   return detail;
-}
-
-function param(c: AppContext, name: string): string {
-  return c.req.param(name) ?? '';
-}
-
-function parseLimit(raw: string | undefined): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 0
-    ? Math.min(value, 500)
-    : undefined;
 }
 
 workItemRoutes.get(
@@ -127,16 +107,12 @@ workItemRoutes.put(
     const jid = param(c, 'jid');
     const channelJid = param(c, 'channelJid');
     if (!ownedWorkspace(user, jid)) return c.json({ error: NOT_FOUND }, 404);
-    const parsed = TeamSettingsBodySchema.safeParse(
-      await c.req.json().catch(() => null),
+    const { settings } = await readBody(
+      c,
+      TeamSettingsBodySchema,
+      () => new WorkItemError('请求格式不正确', 400),
     );
-    if (!parsed.success) return c.json({ error: '请求格式不正确' }, 400);
-    await saveTeamMountSettings(
-      jid,
-      channelJid,
-      parsed.data.settings,
-      actorOf(user),
-    );
+    await saveTeamMountSettings(jid, channelJid, settings, actorOf(user));
     const mount = listTeamMountViews(jid).find(
       (view) => view.channelJid === channelJid,
     );

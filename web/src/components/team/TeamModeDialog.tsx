@@ -17,6 +17,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { IconButton } from '@/components/common/IconButton';
 import { SegmentedControl } from '@/components/common/SegmentedControl';
 import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from '../settings/SettingsLayout';
+import {
   ACCEPT_MODE_OPTIONS,
   ADMISSION_LABELS,
   ADMISSION_ROWS,
@@ -207,33 +212,6 @@ export function TeamModeDialog({
   );
 }
 
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  const id = useId();
-  return (
-    <section aria-labelledby={id} className="space-y-2.5">
-      <div>
-        <h3 id={id} className="text-label font-medium text-foreground">
-          {title}
-        </h3>
-        {description && (
-          <p className="mt-0.5 text-caption leading-5 text-muted-foreground">
-            {description}
-          </p>
-        )}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function TeamSettingsForm({
   draft,
   disabled,
@@ -287,61 +265,63 @@ function TeamSettingsForm({
         </Callout>
       )}
 
-      <div className="flex items-center justify-between gap-4">
-        <label htmlFor={switchId} className="min-w-0">
-          <span className="block text-body font-medium text-foreground">
-            开启团队模式
-          </span>
-          <span className="mt-0.5 block text-caption text-muted-foreground">
-            关闭时这个群和普通绑定完全一样。
-          </span>
-        </label>
-        <Switch
-          id={switchId}
-          checked={draft.enabled}
-          disabled={disabled}
-          onCheckedChange={(enabled) => patch({ enabled })}
+      <SettingsGroup>
+        <SettingsRow
+          inline
+          label="开启团队模式"
+          description="关闭时这个群和普通绑定完全一样。"
+          htmlFor={switchId}
+          control={
+            <Switch
+              id={switchId}
+              checked={draft.enabled}
+              disabled={disabled}
+              onCheckedChange={(enabled) => patch({ enabled })}
+            />
+          }
         />
-      </div>
+      </SettingsGroup>
 
-      <Section
+      <SettingsSection
         title="准入表：谁说的话算数"
-        description={
-          <>
-            名单 = 主人 + 群白名单（/allow）。名单内的人 @
-            机器人总是算请求。「只作候选」交给机器人按主动规则判断；名单外的人发起的请求只读，你批准后才能修改。
-          </>
-        }
+        description="名单 = 主人 + 群白名单（/allow）。名单内的人 @ 机器人总是算请求。「只作候选」交给机器人按主动规则判断；名单外的人发起的请求只读，你批准后才能修改。"
       >
-        <div className="divide-y divide-surface-border rounded-lg ring-1 ring-surface-border">
-          <AdmissionRow label="名单内、@ 了">
-            <span className="text-label text-muted-foreground">
-              {ADMISSION_LABELS.explicit}（固定）
-            </span>
-          </AdmissionRow>
+        <SettingsGroup>
+          <SettingsRow
+            label="名单内、@ 了"
+            control={
+              <span className="text-label text-muted-foreground">
+                {ADMISSION_LABELS.explicit}（固定）
+              </span>
+            }
+          />
           {ADMISSION_ROWS.map((row) => (
-            <AdmissionRow key={row.key} label={row.label}>
-              <SegmentedControl<AdmissionOutcome>
-                label={row.label}
-                size="sm"
-                disabled={disabled}
-                value={draft.admission[row.key]}
-                options={row.options.map((value) => ({
-                  value,
-                  label: ADMISSION_LABELS[value],
-                }))}
-                onChange={(value) =>
-                  patch({
-                    admission: { ...draft.admission, [row.key]: value },
-                  })
-                }
-              />
-            </AdmissionRow>
+            <SettingsRow
+              key={row.key}
+              label={row.label}
+              control={
+                <SegmentedControl<AdmissionOutcome>
+                  label={row.label}
+                  size="sm"
+                  disabled={disabled}
+                  value={draft.admission[row.key]}
+                  options={row.options.map((value) => ({
+                    value,
+                    label: ADMISSION_LABELS[value],
+                  }))}
+                  onChange={(value) =>
+                    patch({
+                      admission: { ...draft.admission, [row.key]: value },
+                    })
+                  }
+                />
+              }
+            />
           ))}
-        </div>
-      </Section>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <Section title="接单方式" description={acceptMode?.description}>
+      <SettingsSection title="接单方式" description={acceptMode?.description}>
         <SegmentedControl
           label="接单方式"
           disabled={disabled}
@@ -357,33 +337,35 @@ function TeamSettingsForm({
             还没有启用的主动规则，候选都会被忽略。
           </p>
         )}
-      </Section>
+      </SettingsSection>
 
-      <Section
+      <SettingsSection
         title={`主动规则 · ${draft.rules.length}/${TEAM_RULE_LIMIT}`}
         description="用一句话写清什么情况下可以主动接手，例如「有人贴线上报错时先排查原因」。"
       >
-        <ul className="space-y-3">
-          <AnimatePresence initial={false}>
-            {draft.rules.map((rule, index) => (
-              <m.li
-                key={rule.id}
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="list-none overflow-hidden"
-              >
-                <RuleEditor
-                  rule={rule}
-                  index={index}
-                  disabled={disabled}
-                  onChange={(next) => setRule(rule.id, next)}
-                  onRemove={() => void removeRule(rule)}
-                />
-              </m.li>
-            ))}
-          </AnimatePresence>
-        </ul>
+        {draft.rules.length > 0 && (
+          <SettingsGroup>
+            <AnimatePresence initial={false}>
+              {draft.rules.map((rule, index) => (
+                <m.div
+                  key={rule.id}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <RuleEditor
+                    rule={rule}
+                    index={index}
+                    disabled={disabled}
+                    onChange={(next) => setRule(rule.id, next)}
+                    onRemove={() => void removeRule(rule)}
+                  />
+                </m.div>
+              ))}
+            </AnimatePresence>
+          </SettingsGroup>
+        )}
         <Button
           type="button"
           variant="outline"
@@ -394,23 +376,8 @@ function TeamSettingsForm({
           <Plus />
           添加规则
         </Button>
-      </Section>
+      </SettingsSection>
     </>
-  );
-}
-
-function AdmissionRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-start gap-1.5 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-      <span className="text-body text-foreground">{label}</span>
-      {children}
-    </div>
   );
 }
 
@@ -431,7 +398,7 @@ function RuleEditor({
   const textId = useId();
   const label = rule.name.trim() || `规则 ${index + 1}`;
   return (
-    <div className="space-y-2 rounded-lg p-3 ring-1 ring-surface-border">
+    <div className="space-y-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <label htmlFor={nameId} className="sr-only">
           规则名称

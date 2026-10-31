@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SegmentedControl } from '@/components/common/SegmentedControl';
+import { SideListRow } from '@/components/common/SideListRow';
 import { cn } from '@/lib/utils';
 import type { Automation } from '../../lib/automation';
 import {
@@ -38,14 +39,10 @@ function AutomationListCell({
   const dimmed = automation.status !== 'active';
   return (
     <li className="group/sidebar-row relative list-none">
-      <button
-        type="button"
-        aria-current={selected ? 'true' : undefined}
-        onClick={() => onSelect(automation.id)}
-        className={cn(
-          'flex w-full cursor-pointer flex-col gap-1 rounded-lg px-3 py-2.5 pr-10 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 phone:pr-3',
-          selected ? 'bg-surface-selected' : 'hover:bg-surface-hover',
-        )}
+      <SideListRow
+        selected={selected}
+        onSelect={() => onSelect(automation.id)}
+        className="pr-10 phone:pr-3"
       >
         <span className="flex min-w-0 items-center gap-1.5">
           <UnreadDot automation={automation} />
@@ -67,7 +64,7 @@ function AutomationListCell({
         >
           {automationSubtitle(automation)}
         </span>
-      </button>
+      </SideListRow>
       {/* A phone runs it from the detail's top bar instead: a 24px button
           on every row starts a billed run on a stray tap. */}
       <button
