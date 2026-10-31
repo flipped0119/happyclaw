@@ -29,7 +29,10 @@ import {
 
 // ── Subscription keys ──────────────────────────────────────────────────
 
-/** The keys a message reaches work items through: its parent, root, thread. */
+/**
+ * The keys a message reaches work items through, most specific first: the
+ * message it replies to, then its root, then its thread.
+ */
 export function teamMessageKeys(meta: {
   parentId?: string;
   rootId?: string;
@@ -83,6 +86,8 @@ export interface TeamGateDeps {
   isOwnBotMessage(messageId: string): boolean;
   /** The item's worker session still exists. */
   hasWorker(item: WorkItem): boolean;
+  /** The item handed `messageId` back to the router (work_handback). */
+  wasHandedBack(itemId: string, messageId: string): boolean;
 }
 
 export type TeamInboundDecision =
@@ -94,6 +99,8 @@ export type TeamInboundDecision =
       items: WorkItem[];
       /** Ended items among `items` that this message resumes. */
       resumeIds: string[];
+      /** The sender is listed: a follow-up from anyone else authorizes nothing. */
+      listed: boolean;
     }
   | {
       kind: 'candidate';
@@ -108,10 +115,18 @@ export type TeamInboundDecision =
     }
   | { kind: 'ignore'; channelJid: string; reason: string };
 
-/** Whether an ended item may be resumed by a person's message. */
-function canResume(item: WorkItem, deps: TeamGateDeps): boolean {
+/**
+ * Whether an ended item may be resumed by a person's message: its mandate
+ * must still hold, so a mandate that relied on the requester being listed
+ * needs them listed still.
+ */
+export function canResumeWorkItem(
+  item: WorkItem,
+  isListed: (senderImId: string | undefined) => boolean,
+): boolean {
+  if (item.status === 'ended' && item.outcome === 'stopped') return false;
   if (!item.mandate.requesterListed) return true;
-  return deps.isListed(item.mandate.requesterImId ?? undefined);
+  return isListed(item.mandate.requesterImId ?? undefined);
 }
 
 export function decideTeamInbound(
@@ -120,26 +135,43 @@ export function decideTeamInbound(
   deps: TeamGateDeps,
 ): TeamInboundDecision {
   const fromBot = message.senderIsBot === true;
-  const found = deps
-    .findSubscribedItems(group.channelJid, teamMessageKeys(message))
-    .filter((item) => deps.hasWorker(item));
-  // A bot never resumes anything; a person resumes an ended item only when
-  // its mandate still holds.
-  const reached = found.filter(
-    (item) => item.status === 'open' || (!fromBot && canResume(item, deps)),
-  );
-  if (reached.length > 0) {
-    return {
-      kind: 'subscribed',
-      channelJid: group.channelJid,
-      workspaceJid: group.workspaceJid,
-      items: reached,
-      resumeIds: reached
-        .filter((item) => item.status === 'ended')
-        .map((item) => item.id),
-    };
-  }
   const listed = !fromBot && deps.isListed(message.senderImId);
+  // The most specific key that reaches a live item wins: a reply to a
+  // message goes to the items of that message only, never also to the
+  // items of its root or thread. Items that handed the replied-to message
+  // back are not reached through its root or thread either.
+  const handedBack = message.parentId
+    ? (item: WorkItem) => deps.wasHandedBack(item.id, message.parentId!)
+    : () => false;
+  const seen: WorkItem[] = [];
+  for (const key of teamMessageKeys(message)) {
+    const found = deps
+      .findSubscribedItems(group.channelJid, [key])
+      .filter((item) => deps.hasWorker(item));
+    for (const item of found) {
+      if (!seen.some((other) => other.id === item.id)) seen.push(item);
+    }
+    // A bot never resumes anything; a person resumes an ended item only
+    // when its mandate still holds.
+    const reached = found.filter(
+      (item) =>
+        !handedBack(item) &&
+        (item.status === 'open' ||
+          (!fromBot && canResumeWorkItem(item, deps.isListed))),
+    );
+    if (reached.length > 0) {
+      return {
+        kind: 'subscribed',
+        channelJid: group.channelJid,
+        workspaceJid: group.workspaceJid,
+        items: reached,
+        resumeIds: reached
+          .filter((item) => item.status === 'ended')
+          .map((item) => item.id),
+        listed,
+      };
+    }
+  }
   const addressed =
     message.mentionedBot ||
     (!!message.parentId && deps.isOwnBotMessage(message.parentId));
@@ -159,7 +191,7 @@ export function decideTeamInbound(
     strength: outcome,
     listed,
     addressed,
-    threadItems: found,
+    threadItems: seen,
   };
 }
 
@@ -183,6 +215,14 @@ export function rememberTeamDecision(
   if (decisions.size > DECISIONS_KEPT) {
     const oldest = decisions.keys().next().value as string | undefined;
     if (oldest !== undefined) decisions.delete(oldest);
+  }
+}
+
+/** Team settings changed: decisions made under the old ones are void. */
+export function forgetTeamDecisions(channelJid: string): void {
+  const prefix = `${channelJid}\u0000`;
+  for (const key of [...decisions.keys()]) {
+    if (key.startsWith(prefix)) decisions.delete(key);
   }
 }
 
@@ -232,6 +272,7 @@ export interface TeamInputItem {
     listed?: boolean;
     addressed?: boolean;
     senderImId?: string;
+    senderIsBot?: boolean;
     threadId?: string;
     workItemId?: string;
     /** A subscribed message: the further items that received a copy. */
@@ -280,23 +321,34 @@ export function withTeamInputAttachment(
   return JSON.stringify([...rest, item]);
 }
 
-/**
- * The full body the agent reads for a team input: the header tag, then the
- * text (escaped like any message body), an assignment's request and note
- * wrapped in their own elements.
- */
-export function renderTeamInputBody(
+/** The header line of a team input, attribute values escaped. */
+function renderTeamInputHeader(
   item: TeamInputItem,
-  message: { content: string; sender_name: string },
+  senderName: string,
 ): string {
   const attrs = item.attrs
-    .map(
-      ([name, value]) =>
-        ` ${name}="${escapeXml(value ?? message.sender_name)}"`,
-    )
+    .map(([name, value]) => ` ${name}="${escapeXml(value ?? senderName)}"`)
     .join('');
-  const header = `<${item.tag}${attrs}/>`;
-  if (item.tag === 'work_approved') return header;
+  return `<${item.tag}${attrs}/>`;
+}
+
+/**
+ * What surrounds a team input's body: the header (with an inferred
+ * candidate's rules, an assignment's `<request>`) before it, an
+ * assignment's `</request>` and note after it. The body itself is left to
+ * the formatter, so quotes, `@` file references and forwarded material are
+ * treated exactly as in any other lane.
+ */
+function teamInputFrame(
+  item: TeamInputItem,
+  senderName: string,
+): { before: string; after: string } {
+  const header = renderTeamInputHeader(item, senderName);
+  if (item.tag === 'work_approved') return { before: header, after: '' };
+  if (item.tag === 'work_assignment') {
+    const note = item.note ? `\n<note>${escapeXml(item.note)}</note>` : '';
+    return { before: `${header}\n<request>`, after: `</request>${note}` };
+  }
   if (item.rules?.length) {
     const rules = item.rules
       .map(
@@ -304,43 +356,47 @@ export function renderTeamInputBody(
           `- ${escapeXml(rule.name)} (${escapeXml(rule.id)}): ${escapeXml(rule.instruction)}`,
       )
       .join('\n');
-    return `${header}\n<team_rules>\n${rules}\n</team_rules>\n${escapeXml(message.content)}`;
+    return {
+      before: `${header}\n<team_rules>\n${rules}\n</team_rules>`,
+      after: '',
+    };
   }
-  if (item.tag === 'work_assignment') {
-    const note = item.note ? `\n<note>${escapeXml(item.note)}</note>` : '';
-    return `${header}\n<request>${escapeXml(message.content)}</request>${note}`;
-  }
-  return `${header}\n${escapeXml(message.content)}`;
+  return { before: header, after: '' };
 }
 
 /**
- * Format a batch with each team input's body rendered by
- * {@link renderTeamInputBody}. The formatter escapes every body, so a team
- * input's body is swapped for a token it leaves alone and put back after:
- * a person cannot forge a header by typing one.
+ * Format a batch with each team input framed by its header. The formatter
+ * escapes and neutralizes every body as usual; the frame is put around the
+ * body through tokens it leaves alone, and a body of anyone else's cannot
+ * carry such a token, so a person cannot forge a header.
  */
 export function formatWithTeamInputs<
   T extends { content: string; sender_name: string; attachments?: string },
 >(messages: T[], format: (messages: T[]) => string): string {
-  const bodies: string[] = [];
+  const frames: { before: string; after: string }[] = [];
   const prepared = messages.map((message) => {
+    const content = message.content.includes('\u0000')
+      ? message.content.replace(/\u0000/g, '')
+      : message.content;
     const item = readTeamInput(message.attachments);
     if (!item) {
-      // No other body may carry a token of its own.
-      return message.content.includes('\u0000')
-        ? { ...message, content: message.content.replace(/\u0000/g, '') }
-        : message;
+      return content === message.content ? message : { ...message, content };
     }
-    bodies.push(renderTeamInputBody(item, message));
+    const index = frames.push(teamInputFrame(item, message.sender_name)) - 1;
+    const body = item.tag === 'work_approved' ? '' : content;
     return {
       ...message,
-      content: `\u0000team-input:${bodies.length - 1}\u0000`,
+      // The body starts a line of its own, as in any lane: an `@` at its
+      // start is neutralized (forwarded material) or read (a person's own
+      // file reference) exactly as the formatter decides.
+      content: `\u0000team-before:${index}\u0000\n${body}\u0000team-after:${index}\u0000`,
     };
   });
-  if (bodies.length === 0) return format(messages);
+  if (frames.length === 0) return format(prepared);
   return format(prepared).replace(
-    /\u0000team-input:(\d+)\u0000/g,
-    (token, index: string) => bodies[Number(index)] ?? token,
+    /\u0000team-(before|after):(\d+)\u0000/g,
+    (token, side: 'before' | 'after', index: string) =>
+      frames[Number(index)]?.[side] ?? token,
   );
 }
 
@@ -358,6 +414,7 @@ export function candidateInputItem(input: {
   settings: TeamSettings;
   threadItems: readonly WorkItem[];
   senderImId?: string;
+  senderIsBot?: boolean;
   threadId?: string;
   /** Present on a hand-back: the item that returned it and why. */
   handback?: { item: WorkItem; reason: string };
@@ -392,6 +449,7 @@ export function candidateInputItem(input: {
       listed: input.listed,
       addressed: input.addressed,
       senderImId: input.senderImId,
+      ...(input.senderIsBot ? { senderIsBot: true } : {}),
       threadId: input.threadId,
     },
   };
@@ -401,8 +459,11 @@ export function candidateInputItem(input: {
 export function followupInputItem(input: {
   item: WorkItem;
   triggerMessageId: string;
+  /** The sender is listed; a follow-up from anyone else authorizes nothing. */
+  listed: boolean;
   addressed: boolean;
   senderImId?: string;
+  senderIsBot?: boolean;
   threadId?: string;
   copyItemIds?: string[];
 }): TeamInputItem {
@@ -413,11 +474,14 @@ export function followupInputItem(input: {
       ['item', `#${input.item.seq}`],
       ['trigger', input.triggerMessageId],
       ['sender', null],
+      ['listed', String(input.listed)],
     ],
     facts: {
       workItemId: input.item.id,
+      listed: input.listed,
       addressed: input.addressed,
       senderImId: input.senderImId,
+      ...(input.senderIsBot ? { senderIsBot: true } : {}),
       threadId: input.threadId,
       ...(input.copyItemIds?.length ? { copyItemIds: input.copyItemIds } : {}),
     },

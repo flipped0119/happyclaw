@@ -18,12 +18,14 @@ import {
   type ChannelRouteSnapshot,
 } from './channel-reliability-store.js';
 import { ChannelTurnRuntime } from './channel-turn-runtime.js';
-import { ensureChatExists, storeMessageDirect } from './db.js';
+import { ensureChatExists, getMessage, storeMessageDirect } from './db.js';
 import { deliverFeishuCapabilityMutation } from './feishu-capability-outbox.js';
-import type {
-  FeishuCapabilityRequest,
-  FeishuCapabilityResult,
+import {
+  feishuCapabilityUuid,
+  type FeishuCapabilityRequest,
+  type FeishuCapabilityResult,
 } from './feishu-capability.js';
+import { DefinitiveChannelDeliveryError } from './channel-outbox-delivery.js';
 import { logger } from './logger.js';
 import {
   TEAM_INPUT_ATTACHMENT_TYPE,
@@ -40,13 +42,20 @@ export interface TeamReplyRequest {
   /** The provider message the reply quotes. */
   quoteMessageId: string;
   text: string;
-  /** Stable identity: the same key never posts twice. */
+  /** The reply's identity (work_item_replies.id). */
   deliveryKey: string;
+  /** 1 for the first send; each later attempt has a turn of its own. */
+  attempt: number;
 }
 
+/**
+ * `retryable`: the outcome is unknown or the channel was not reachable, so
+ * the same reply may be sent again (Feishu dedupes it by its uuid); otherwise
+ * the provider refused it for good (recalled message, chat gone).
+ */
 export type TeamReplyOutcome =
   | { ok: true; providerMessageId: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; retryable: boolean };
 
 export interface WorkItemRuntimeHooks {
   /** Admit a stored input like an inbound follow-up in `queue` mode. */
@@ -58,8 +67,11 @@ export interface WorkItemRuntimeHooks {
   /** Start processing an idle Runtime Session. */
   wake(workspaceJid: string, agentId: string): void;
   broadcastNewMessage(laneJid: string, message: NewMessage): void;
-  /** Stop the turn a lane is running now, if any (the lane stays usable). */
-  interruptLane(laneJid: string): void;
+  /**
+   * Stop a lane like `/break`: withdraw the inputs it has not run yet and
+   * interrupt the turn it runs now. The lane stays usable.
+   */
+  stopLane(laneJid: string): void;
   /** Post `text` quoted under a message of the group, in the main chat. */
   postReply(request: TeamReplyRequest): Promise<TeamReplyOutcome>;
   /** A bot message into a lane's Web transcript (never sent to IM). */
@@ -94,8 +106,8 @@ const TEAM_INPUT_SENDER_NAME = 'HappyClaw';
 
 /**
  * Store and admit an input the host composed for a team lane. The id is
- * fixed by the caller, so composing the same input twice is a no-op for the
- * agent (the row is replaced, the queue sees one input).
+ * fixed by the caller and an input already stored is left alone, so a replay
+ * never moves it behind the lane's cursor to run a second time.
  */
 export function injectTeamInput(input: {
   workspaceJid: string;
@@ -111,9 +123,12 @@ export function injectTeamInput(input: {
    */
   sourceJid?: string;
   senderName?: string;
-}): void {
+  /** A copy of a group message keeps its provider context (quotes, forwards). */
+  channelContext?: ChannelTurnContext | null;
+}): boolean {
   const runtime = getWorkItemRuntimeHooks();
   const laneJid = laneJidOf(input.workspaceJid, input.agentId);
+  if (getMessage(laneJid, input.messageId)) return false;
   const sourceJid = input.sourceJid ?? laneJid;
   const attachments = withTeamInputAttachment(null, {
     type: TEAM_INPUT_ATTACHMENT_TYPE,
@@ -142,6 +157,7 @@ export function injectTeamInput(input: {
     {
       attachments,
       sourceJid,
+      ...(input.channelContext ? { channelContext: input.channelContext } : {}),
       meta: { sourceKind: 'work_item_input' },
     },
   );
@@ -154,6 +170,7 @@ export function injectTeamInput(input: {
   runtime.broadcastNewMessage(laneJid, { ...row, attachments: undefined });
   if (disposition === 'started')
     runtime.wake(input.workspaceJid, input.agentId);
+  return true;
 }
 
 // ── Replies in the group, one chat at a time ───────────────────────────
@@ -183,6 +200,7 @@ export function queueTeamReply(
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        retryable: true,
       };
     });
   replyChains.set(request.channelJid, next);
@@ -200,10 +218,13 @@ export async function flushTeamReplies(): Promise<void> {
 }
 
 /**
- * Post one team reply: plain text quoted under a message of the group, in
- * the main chat (`reply_text`), through a turn and Outbox row of its own
- * keyed by the reply's identity, so a retry or a replay never posts twice.
- * Resolves to the provider message id, which the caller subscribes.
+ * Post one attempt of a team reply: plain text quoted under a message of the
+ * group, in the main chat (`reply_text`), through a turn and Outbox row of
+ * the attempt's own. Every attempt of one reply carries the same Feishu uuid,
+ * derived from the reply's identity, so a re-send after an uncertain or
+ * interrupted attempt returns the message Feishu already accepted instead of
+ * posting a second one (within Feishu's one-hour dedupe window), and an
+ * attempt left uncertain never blocks the next one.
  */
 export async function deliverTeamReplyThroughOutbox(
   request: TeamReplyRequest,
@@ -215,7 +236,7 @@ export async function deliverTeamReplyThroughOutbox(
 ): Promise<TeamReplyOutcome> {
   const runtime = ChannelTurnRuntime.start({
     ...route,
-    externalMessageId: `team-reply:${request.deliveryKey}`,
+    externalMessageId: `team-reply:${request.deliveryKey}:${request.attempt}`,
     correlationId: request.quoteMessageId,
   });
   const disposition = runtime.executionDisposition;
@@ -231,7 +252,11 @@ export async function deliverTeamReplyThroughOutbox(
           ok: true,
           providerMessageId: typeof posted === 'string' ? posted : null,
         }
-      : { ok: false, error: `Reply delivery is ${disposition}.` };
+      : {
+          ok: false,
+          error: `Reply delivery is ${disposition}.`,
+          retryable: true,
+        };
   }
   const context: ChannelTurnContext = {
     schemaVersion: 1,
@@ -244,6 +269,7 @@ export async function deliverTeamReplyThroughOutbox(
   const capability: FeishuCapabilityRequest = {
     operation: 'reply_text',
     params: { messageId: request.quoteMessageId, text: request.text },
+    providerUuid: teamReplyUuid(request.deliveryKey),
   };
   try {
     const mutation = await deliverFeishuCapabilityMutation({
@@ -254,14 +280,17 @@ export async function deliverTeamReplyThroughOutbox(
       execute: () => execute(context, capability),
     });
     if (mutation.delivery.status !== 'delivered') {
+      const refused =
+        mutation.delivery.status === 'failed' &&
+        mutation.delivery.cause instanceof DefinitiveChannelDeliveryError;
       const error =
         mutation.delivery.status === 'uncertain'
-          ? 'Reply delivery is uncertain; it needs manual reconciliation.'
+          ? 'Reply delivery is uncertain.'
           : mutation.delivery.error ||
             `Reply delivery ended as ${mutation.delivery.status}.`;
       if (mutation.delivery.status === 'uncertain') runtime.interrupt(error);
       else runtime.fail(error);
-      return { ok: false, error };
+      return { ok: false, error, retryable: !refused };
     }
     const data = mutation.result?.data as { messageId?: unknown } | undefined;
     const providerMessageId =
@@ -274,8 +303,14 @@ export async function deliverTeamReplyThroughOutbox(
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
+      retryable: true,
     };
   } finally {
     runtime.dispose();
   }
+}
+
+/** The Feishu uuid every attempt of one reply carries. */
+export function teamReplyUuid(deliveryKey: string): string {
+  return feishuCapabilityUuid(`team-reply:${deliveryKey}`);
 }

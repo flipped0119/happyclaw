@@ -47,19 +47,26 @@ const ACTOR = { userId: OWNER, isAdmin: false };
 let replySeq = 0;
 const replies: runtime.TeamReplyRequest[] = [];
 const laneMessages: { laneJid: string; text: string; id: string }[] = [];
-const interrupted: string[] = [];
+const stopped: string[] = [];
 const broadcasts: string[] = [];
 let failReplies = false;
+let replyRetryable = false;
 
 function installHooks(): void {
   runtime.setWorkItemRuntimeHooks({
     admitInput: () => 'started',
     wake: vi.fn(),
     broadcastNewMessage: vi.fn(),
-    interruptLane: (laneJid) => interrupted.push(laneJid),
+    stopLane: (laneJid) => stopped.push(laneJid),
     postReply: async (request) => {
       replies.push(request);
-      if (failReplies) return { ok: false, error: 'rejected by Feishu' };
+      if (failReplies) {
+        return {
+          ok: false,
+          error: 'rejected by Feishu',
+          retryable: replyRetryable,
+        };
+      }
       return { ok: true, providerMessageId: `om_bot_${++replySeq}` };
     },
     postLaneMessage: async (laneJid, text, id) => {
@@ -207,12 +214,14 @@ beforeAll(() => {
 beforeEach(() => {
   replies.length = 0;
   laneMessages.length = 0;
-  interrupted.length = 0;
+  stopped.length = 0;
   broadcasts.length = 0;
   failReplies = false;
+  replyRetryable = false;
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await service.settleTeamReplies();
   db.closeDatabase();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -265,7 +274,7 @@ describe('work_route', () => {
       source_kind: 'work_item',
       chat_jid: WORKSPACE,
     });
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     // The acknowledgement is quoted under the request and its message is
     // subscribed for the item.
     expect(replies).toEqual([
@@ -426,7 +435,7 @@ describe('work_route', () => {
       status: 'ended',
       outcome: 'stopped',
     });
-    expect(interrupted).toContain(`${WORKSPACE}#agent:${item.agentId}`);
+    expect(stopped).toContain(`${WORKSPACE}#agent:${item.agentId}`);
   });
 
   test('a decided candidate is not decided again', async () => {
@@ -472,7 +481,7 @@ describe('work_reply', () => {
   async function newItem(trigger: string): Promise<WorkItem> {
     storeCandidate(trigger);
     const { workItemId } = await accept(trigger);
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     replies.length = 0;
     return store.getWorkItem(workItemId as string)!;
   }
@@ -493,7 +502,7 @@ describe('work_reply', () => {
     expect(
       await reply({ purpose: 'result', workItemId: item.id, text: '做不了' }),
     ).toEqual({ ok: true, data: { queued: true } });
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     expect(replies).toEqual([
       expect.objectContaining({ quoteMessageId: 'om_res', text: '做不了' }),
     ]);
@@ -530,7 +539,7 @@ describe('work_reply', () => {
         text: '用哪个分支？',
       }),
     ).toMatchObject({ ok: true });
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     expect(replies[0]).toMatchObject({ quoteMessageId: 'om_q' });
   });
 
@@ -589,7 +598,7 @@ describe('work_reply', () => {
     });
     failReplies = true;
     await reply({ purpose: 'result', workItemId: item.id, text: '失败了' });
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     expect(store.listWorkEvents(item.id)).toContainEqual(
       expect.objectContaining({ kind: 'reply', state: 'failed' }),
     );
@@ -668,7 +677,7 @@ describe('work reports and approval', () => {
     storeCandidate('om_ack');
     const { workItemId } = await accept('om_ack');
     const item = store.getWorkItem(workItemId as string)!;
-    await runtime.flushTeamReplies();
+    await service.settleTeamReplies();
     replies.length = 0;
     expect(
       await service.handleWorkIpc(workerCaller(item), {
@@ -688,6 +697,52 @@ describe('work reports and approval', () => {
   });
 });
 
+/**
+ * A group message the connector stored in its first item's lane, with the
+ * header the gate gave it, then the post-store fan-out.
+ */
+function storeFollowup(
+  messageId: string,
+  input: {
+    threadId?: string;
+    parentId?: string;
+    sender?: string;
+    content?: string;
+  } = {},
+) {
+  const context = service.resolveTeamGroup(CHAT)!;
+  const message = {
+    messageId,
+    threadId: input.threadId,
+    parentId: input.parentId,
+    senderImId: input.sender ?? 'ou_listed',
+    mentionedBot: false,
+  };
+  const decision = gate.decideTeamInbound(
+    context,
+    message,
+    service.teamGateDeps(context),
+  );
+  if (decision.kind !== 'subscribed') return { decision, laneJid: null };
+  const laneJid = `${WORKSPACE}#agent:${decision.items[0].agentId}`;
+  const header = service.teamInputItemFor(decision, message, context.settings)!;
+  db.storeMessageDirect(
+    messageId,
+    laneJid,
+    message.senderImId,
+    '小王',
+    input.content ?? '还有一个问题',
+    new Date().toISOString(),
+    false,
+    {
+      sourceJid: CHAT,
+      attachments: gate.withTeamInputAttachment(null, header),
+    },
+  );
+  service.onTeamMessageStored(laneJid, messageId);
+  return { decision, laneJid };
+}
+
 describe('subscribed group messages', () => {
   test('the first item gets the message, further items a copy; ended items resume, stopped ones do not', async () => {
     storeCandidate('om_a');
@@ -706,35 +761,15 @@ describe('subscribed group messages', () => {
       summary: 'done',
     });
     await service.stopWorkItem(c.id, ACTOR);
+    broadcasts.length = 0;
 
-    const context = service.resolveTeamGroup(CHAT)!;
-    const decision = gate.decideTeamInbound(
-      context,
-      {
-        messageId: 'om_follow',
-        threadId: 'omt_shared',
-        senderImId: 'ou_listed',
-        mentionedBot: false,
-      },
-      {
-        findSubscribedItems: (channel, keys) =>
-          store.findSubscribedWorkItems(channel, keys, WORKSPACE),
-        isListed: (sender) => service.isTeamListed(context, sender),
-        isOwnBotMessage: (id) => service.isTeamBotMessage(context, id),
-        hasWorker: service.hasWorkerSession,
-      },
-    );
+    const { decision } = storeFollowup('om_follow', {
+      threadId: 'omt_shared',
+    });
     expect(decision.kind).toBe('subscribed');
     if (decision.kind !== 'subscribed') return;
     expect(decision.items.map((item) => item.id)).toEqual([a.id, b.id]);
     expect(decision.resumeIds).toEqual([b.id]);
-
-    service.onTeamMessageStored(decision, {
-      id: 'om_follow',
-      content: '还有一个问题',
-      sender_name: '小王',
-      source_jid: CHAT,
-    });
     expect(store.getWorkItem(b.id)).toMatchObject({ status: 'open' });
     const copy = laneRows(`${WORKSPACE}#agent:${b.agentId}`).find(
       (row) => row.id === service.followupCopyId('om_follow', b.id),
@@ -744,11 +779,40 @@ describe('subscribed group messages', () => {
       source_jid: CHAT,
       source_kind: 'work_item_input',
     });
+    expect(gate.readTeamInput(copy!.attachments)?.attrs).toContainEqual([
+      'listed',
+      'true',
+    ]);
     expect(
       laneRows(`${WORKSPACE}#agent:${c.agentId}`).some((row) =>
         row.id.startsWith('om_follow'),
       ),
     ).toBe(false);
+
+    // A replay of the same message changes nothing.
+    const events = (id: string) =>
+      store.listWorkEvents(id).filter((event) => event.kind === 'input');
+    const before = [
+      events(a.id).length,
+      events(b.id).length,
+      broadcasts.length,
+    ];
+    const copyStamp = copy!.timestamp;
+    service.onTeamMessageStored(`${WORKSPACE}#agent:${a.agentId}`, 'om_follow');
+    expect([
+      events(a.id).length,
+      events(b.id).length,
+      broadcasts.length,
+    ]).toEqual(before);
+    expect(
+      laneRows(`${WORKSPACE}#agent:${b.agentId}`).find(
+        (row) => row.id === service.followupCopyId('om_follow', b.id),
+      )?.timestamp,
+    ).toBe(copyStamp);
+    expect(
+      store.listWorkEvents(b.id).filter((event) => event.kind === 'resume'),
+    ).toHaveLength(1);
+
     // The follow-up was delivered to a, so a may acknowledge it.
     expect(
       await service.handleWorkIpc(workerCaller(a), {
@@ -759,45 +823,48 @@ describe('subscribed group messages', () => {
     ).toEqual({ ok: true, data: { duplicate: false } });
   });
 
-  test('a hand-back returns the follow-up to the router once', async () => {
+  test('a reply reaches the items of the message it replies to only', async () => {
+    storeCandidate('om_p1');
+    const first = store.getWorkItem(
+      (await accept('om_p1')).workItemId as string,
+    )!;
+    storeCandidate('om_p2');
+    const second = store.getWorkItem(
+      (await accept('om_p2')).workItemId as string,
+    )!;
+    // Both follow the thread; only the second subscribes the parent.
+    store.subscribeWorkItem(first.id, CHAT, 'thread:omt_p', 'x');
+    store.subscribeWorkItem(second.id, CHAT, 'thread:omt_p', 'x');
+    const { decision } = storeFollowup('om_reply', {
+      threadId: 'omt_p',
+      parentId: 'om_p2',
+    });
+    expect(
+      decision.kind === 'subscribed' && decision.items.map((i) => i.id),
+    ).toEqual([second.id]);
+  });
+
+  test('a follow-up from an unlisted sender is marked so', async () => {
+    storeCandidate('om_ul');
+    await accept('om_ul');
+    const { laneJid } = storeFollowup('om_ul2', {
+      parentId: 'om_ul',
+      sender: 'ou_stranger',
+    });
+    const row = laneRows(laneJid!).find((entry) => entry.id === 'om_ul2');
+    expect(gate.readTeamInput(row!.attachments)?.attrs).toContainEqual([
+      'listed',
+      'false',
+    ]);
+  });
+
+  test('a hand-back returns the follow-up to the router once, and replies to it stay away', async () => {
     storeCandidate('om_h');
     const item = store.getWorkItem(
       (await accept('om_h')).workItemId as string,
     )!;
-    const header = gate.followupInputItem({
-      item,
-      triggerMessageId: 'om_h2',
-      addressed: true,
-      senderImId: 'ou_listed',
-    });
-    db.storeMessageDirect(
-      'om_h2',
-      `${WORKSPACE}#agent:${item.agentId}`,
-      'ou_listed',
-      '小王',
-      '另一个需求',
-      new Date().toISOString(),
-      false,
-      {
-        sourceJid: CHAT,
-        attachments: gate.withTeamInputAttachment(null, header),
-      },
-    );
-    service.onTeamMessageStored(
-      {
-        kind: 'subscribed',
-        channelJid: CHAT,
-        workspaceJid: WORKSPACE,
-        items: [item],
-        resumeIds: [],
-      },
-      {
-        id: 'om_h2',
-        content: '另一个需求',
-        sender_name: '小王',
-        source_jid: CHAT,
-      },
-    );
+    store.subscribeWorkItem(item.id, CHAT, 'thread:omt_h', 'x');
+    storeFollowup('om_h2', { threadId: 'omt_h', parentId: 'om_h' });
     const handback = () =>
       service.handleWorkIpc(workerCaller(item), {
         type: 'work_handback',
@@ -814,6 +881,13 @@ describe('subscribed group messages', () => {
       'handed_back_by',
       `#${item.seq}`,
     ]);
+    // A reply to the handed-back message no longer reaches the item, not
+    // even through its thread.
+    const { decision } = storeFollowup('om_h3', {
+      threadId: 'omt_h',
+      parentId: 'om_h2',
+    });
+    expect(decision.kind).not.toBe('subscribed');
     // The source request itself is not a follow-up.
     expect(
       await service.handleWorkIpc(workerCaller(item), {
@@ -822,6 +896,295 @@ describe('subscribed group messages', () => {
         reason: 'x',
       }),
     ).toMatchObject({ ok: false });
+  });
+
+  test('a stopped item neither acknowledges nor hands back', async () => {
+    storeCandidate('om_st');
+    const item = store.getWorkItem(
+      (await accept('om_st')).workItemId as string,
+    )!;
+    storeFollowup('om_st2', { parentId: 'om_st' });
+    await service.stopWorkItem(item.id, ACTOR);
+    expect(stopped).toContain(`${WORKSPACE}#agent:${item.agentId}`);
+    for (const type of ['work_ack', 'work_handback']) {
+      expect(
+        await service.handleWorkIpc(workerCaller(item), {
+          type,
+          triggerMessageId: 'om_st2',
+          text: 'x',
+          reason: 'x',
+        }),
+      ).toEqual({ ok: false, error: 'This work item has ended.' });
+    }
+  });
+});
+
+describe('replies are durable and reconciled', () => {
+  test('a reply is recorded before the tool returns and sent after a restart', async () => {
+    storeCandidate('om_dur');
+    // The channel is down: nothing reaches the group yet.
+    failReplies = true;
+    replyRetryable = true;
+    const before = replies.length;
+    const result = await service.handleWorkIpc(routerCaller(), {
+      type: 'work_reply',
+      purpose: 'answer',
+      triggerMessageId: 'om_dur',
+      text: '在 README 里',
+    });
+    expect(result).toEqual({ ok: true, data: { queued: true } });
+    const id = `answer:${CHAT}:om_dur`;
+    // Durable at once, before any send settled.
+    expect(store.getWorkItemReply(id)).toMatchObject({ status: 'pending' });
+    await service.settleTeamReplies();
+    expect(replies.length).toBeGreaterThan(before);
+    expect(store.getWorkItemReply(id)?.status).toBe('pending');
+    // A restart finds it pending and sends it.
+    failReplies = false;
+    replyRetryable = false;
+    service.resumePendingTeamReplies();
+    await service.settleTeamReplies();
+    expect(store.getWorkItemReply(id)).toMatchObject({
+      status: 'delivered',
+      providerMessageId: expect.stringMatching(/^om_bot_/),
+    });
+    // Each attempt is a new one of the same reply (same key, so Feishu
+    // dedupes the re-sends by its uuid).
+    const attempts = replies
+      .slice(before)
+      .filter((request) => request.deliveryKey === id)
+      .map((request) => request.attempt);
+    expect(attempts.length).toBeGreaterThanOrEqual(2);
+    expect(attempts).toEqual(attempts.map((_, index) => attempts[0] + index));
+  });
+
+  test('a reply Feishu refuses for good puts a question on the item', async () => {
+    storeCandidate('om_gone');
+    const { workItemId } = await accept('om_gone');
+    failReplies = true;
+    await service.settleTeamReplies();
+    const item = store.getWorkItem(workItemId as string)!;
+    expect(store.getWorkItemReply('ack:om_gone')?.status).toBe('failed');
+    expect(item.attention).toMatch(/确认没有发出/);
+    const view = service
+      .listWorkItemViews(WORKSPACE)
+      .find((entry) => entry.id === item.id)!;
+    expect(view.stage).toBe('answer');
+  });
+
+  test('a result is posted once per report and an answer once per candidate', async () => {
+    storeCandidate('om_once');
+    const { workItemId } = await accept('om_once');
+    const item = store.getWorkItem(workItemId as string)!;
+    const result = () =>
+      service.handleWorkIpc(routerCaller(), {
+        type: 'work_reply',
+        purpose: 'result',
+        workItemId: item.id,
+        text: '做不了',
+      });
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'blocked',
+      summary: '没权限',
+    });
+    expect(await result()).toMatchObject({ ok: true });
+    expect(await result()).toMatchObject({ ok: false });
+    // A new report may be answered again.
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'failed',
+      summary: '还是不行',
+    });
+    expect(await result()).toMatchObject({ ok: true });
+
+    storeCandidate('om_ask2');
+    const answer = () =>
+      service.handleWorkIpc(routerCaller(), {
+        type: 'work_reply',
+        purpose: 'answer',
+        triggerMessageId: 'om_ask2',
+        text: '答',
+      });
+    expect(await answer()).toMatchObject({ ok: true });
+    expect(await answer()).toMatchObject({ ok: false });
+  });
+
+  test('a long text is refused by characters as well as words', async () => {
+    storeCandidate('om_chars');
+    const result = await service.handleWorkIpc(routerCaller(), {
+      type: 'work_reply',
+      purpose: 'answer',
+      triggerMessageId: 'om_chars',
+      text: 'a'.repeat(700),
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { error: string }).error).toMatch(/characters/);
+  });
+
+  test("a reply to a worker's acknowledgement addresses the bot", async () => {
+    storeCandidate('om_wack');
+    const item = store.getWorkItem(
+      (await accept('om_wack')).workItemId as string,
+    )!;
+    storeFollowup('om_wack2', { parentId: 'om_wack' });
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_ack',
+      triggerMessageId: 'om_wack2',
+      text: '收到',
+    });
+    await service.settleTeamReplies();
+    const posted = store.getWorkItemReply('ack:om_wack2')!.providerMessageId!;
+    expect(
+      service.isTeamBotMessage(service.resolveTeamGroup(CHAT)!, posted),
+    ).toBe(true);
+  });
+});
+
+describe('attach', () => {
+  test('an ended item whose listed requester left is not resumed by an attach', async () => {
+    storeCandidate('om_att0');
+    const item = store.getWorkItem(
+      (await accept('om_att0')).workItemId as string,
+    )!;
+    await service.handleWorkIpc(workerCaller(item), {
+      type: 'work_report',
+      state: 'ready',
+      summary: 'done',
+    });
+    expect(store.getWorkItem(item.id)?.status).toBe('ended');
+    // The requester (ou_listed) leaves the allowlist.
+    setGroup(CHAT, { sender_allowlist: [] });
+    storeCandidate('om_att1', { sender: 'ou_owner' });
+    const attach = (trigger: string) =>
+      route({ kind: 'attach', triggerMessageId: trigger, workItemId: item.id });
+    const refused = await attach('om_att1');
+    expect(
+      (refused as { data: { results: { ok: boolean; error?: string }[] } }).data
+        .results[0],
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/no longer listed/),
+    });
+    expect(store.getWorkItem(item.id)?.status).toBe('ended');
+    // Listed again: the attach resumes it.
+    setGroup(CHAT);
+    expect(await attach('om_att1')).toMatchObject({
+      data: { results: [{ ok: true, decision: 'attach' }] },
+    });
+    expect(store.getWorkItem(item.id)?.status).toBe('open');
+  });
+});
+
+describe('team mode going away', () => {
+  test('a worker of a group whose team mode is off can no longer act, and its items stop', async () => {
+    storeCandidate('om_off');
+    const item = store.getWorkItem(
+      (await accept('om_off')).workItemId as string,
+    )!;
+    const settings = store.getTeamMount(CHAT)!.settings;
+    await service.saveTeamMountSettings(
+      WORKSPACE,
+      CHAT,
+      { ...settings, enabled: false },
+      ACTOR,
+    );
+    expect(store.getWorkItem(item.id)).toMatchObject({
+      status: 'ended',
+      outcome: 'stopped',
+    });
+    expect(store.listWorkEvents(item.id).at(-1)).toMatchObject({
+      kind: 'stop',
+      text: 'team_mode_off',
+    });
+    expect(
+      await service.handleWorkIpc(workerCaller(item), {
+        type: 'work_report',
+        state: 'progress',
+        summary: 'x',
+      }),
+    ).toEqual({ ok: false, error: 'Team mode is off for this group.' });
+    await enable();
+  });
+
+  test('a report made while the router is gone reaches the next router', async () => {
+    storeCandidate('om_norouter');
+    const item = store.getWorkItem(
+      (await accept('om_norouter')).workItemId as string,
+    )!;
+    const team = store.getTeamMount(CHAT)!;
+    const { deleteConversationSession } =
+      await import('../src/session-factory.js');
+    await deleteConversationSession({
+      workspaceJid: WORKSPACE,
+      group: db.getRegisteredGroup(WORKSPACE)!,
+      session: db.getAgent(team.routerAgentId!)!,
+    });
+    // The worker can still report while its group runs team mode.
+    store.saveTeamMountSettings({
+      channelJid: CHAT,
+      workspaceJid: WORKSPACE,
+      settings: team.settings,
+      routerAgentId: null,
+      updatedBy: null,
+      now: new Date().toISOString(),
+    });
+    expect(
+      await service.handleWorkIpc(workerCaller(item), {
+        type: 'work_report',
+        state: 'blocked',
+        summary: '复现了',
+      }),
+    ).toEqual({ ok: true, data: {} });
+    expect(store.listWorkEvents(item.id).at(-1)).toMatchObject({
+      kind: 'report',
+      state: 'undelivered',
+    });
+    await enable();
+    const reports = laneRows(routerLane()).filter(
+      (row) => gate.readTeamInput(row.attachments)?.tag === 'work_report',
+    );
+    expect(reports.map((row) => row.content)).toContain('复现了');
+  });
+});
+
+describe('IPC a team session may not use', () => {
+  test('of the Feishu capabilities only the reads are allowed', () => {
+    for (const read of [
+      'get_chat',
+      'list_members',
+      'get_user',
+      'get_history',
+    ]) {
+      expect(service.teamIpcRefusal('feishu_capability', read)).toBeNull();
+    }
+    for (const write of [
+      'send_card',
+      'api_request',
+      'edit_message',
+      'recall_message',
+      'add_reaction',
+      'reply_text',
+      undefined,
+    ]) {
+      expect(service.teamIpcRefusal('feishu_capability', write)).toMatch(
+        /only read/,
+      );
+    }
+    expect(service.teamIpcRefusal('send_file', undefined)).toMatch(/only read/);
+    expect(service.teamIpcRefusal('workspace_memory', undefined)).toBeNull();
+  });
+});
+
+describe('recall', () => {
+  test('recalling a follow-up withdraws its copies and its hand-back', async () => {
+    storeCandidate('om_rc');
+    await accept('om_rc');
+    const { laneJid } = storeFollowup('om_rc2', { parentId: 'om_rc' });
+    const row = laneRows(laneJid!).find((entry) => entry.id === 'om_rc2')!;
+    expect(
+      service.followupCopyIdsOf(CHAT, 'om_rc2', row.attachments),
+    ).toContain('handback:om_rc2');
   });
 });
 

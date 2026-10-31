@@ -6,6 +6,7 @@ import { isAutomationTurnInput } from '../../src/agent-builder-turn-auth.js';
 import * as automationLedger from '../../src/automation-run-ledger.js';
 import { canDeleteAcknowledgedIpcSource } from '../../src/host-ipc-output-router.js';
 import { WORK_IPC_TYPES } from '../../src/work-items.js';
+import { readTeamInput } from '../../src/team-gate.js';
 
 // Execute whole production functions with explicit dependencies, without
 // importing index.ts (which starts the server). No routing/cursor algorithm is
@@ -77,10 +78,17 @@ function automationDefaults(): Record<string, unknown> {
     isWorkIpcType: (type: unknown) =>
       (WORK_IPC_TYPES as readonly unknown[]).includes(type),
     resolveTeamRole: () => null,
+    // processAgentConversation's own: extracted callbacks close over it.
+    teamRole: null,
     teamRoleKey: () => null,
     resolveTeamRoute: () => null,
     afterTeamMessageStored: () => {},
     followupCopyIdsOf: () => [],
+    readTeamInput,
+    onTeamMessageStored: () => {},
+    // utils.ts reads config at import; tests mock config, so not imported.
+    agentIdOfJid: (jid: string) =>
+      jid.includes('#agent:') ? jid.split('#agent:')[1] || null : null,
     getAgentBuilderInputMessage: () => null,
   };
 }
@@ -93,6 +101,9 @@ const AUTOMATION_SOURCE_HELPERS = [
   'withdrawQueuedInputsOfEndedRuns',
   'automationRunIdForInput',
   'createReplyStreamingSession',
+  // Team mode helpers every connector and /break path reaches.
+  'breakLane',
+  'onImMessagePersisted',
 ];
 
 const HOST_INDEX = new URL('../../src/index.ts', import.meta.url);
