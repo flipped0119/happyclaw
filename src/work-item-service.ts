@@ -13,6 +13,7 @@
  */
 import crypto from 'crypto';
 
+import { isAutomationIpcType } from './automation-run-ledger.js';
 import { channelConversationJid } from './channel-address.js';
 import { resolveChannelConversationKind } from './channel-conversation-kind.js';
 import {
@@ -556,6 +557,10 @@ export function stopGroupWorkItems(channelJid: string, reason: string): void {
   })) {
     broadcast(stopItem(item, reason));
   }
+  // Nothing the group was still owed goes out any more.
+  for (const reply of listPendingWorkItemReplies()) {
+    if (reply.channelJid === channelJid) voidReply(reply, reason);
+  }
 }
 
 /**
@@ -566,6 +571,11 @@ export function reconcileTeamGroup(channelJid: string): void {
   const team = getTeamMount(channelJid);
   if (!team?.settings.enabled) return;
   if (!teamMountIneligibility(channelJid, team.workspaceJid)) return;
+  // Chat metadata not known (yet): routing pauses, nothing is stopped.
+  const chat = getRegisteredGroup(channelJid);
+  if (resolveChannelConversationKind(channelJid, chat ?? {}) === 'unknown') {
+    return;
+  }
   if (countWorkItemsByChannel(channelJid, 'open') === 0) return;
   stopGroupWorkItems(channelJid, 'group_rebound');
 }
@@ -1116,6 +1126,12 @@ async function sendReply(id: string): Promise<void> {
     settleReplyFailed(reply, '投递结果无法确认，已停止重发');
     return;
   }
+  // Team mode turned off or the group moved: the reply is void.
+  const context = resolveTeamGroup(reply.channelJid);
+  if (!context || context.workspaceJid !== reply.workspaceJid) {
+    voidReply(reply, 'team_mode_off');
+    return;
+  }
   repliesInFlight.add(id);
   const attempt = reply.attempt + 1;
   updateWorkItemReply(id, { attempt }, now());
@@ -1142,6 +1158,20 @@ async function sendReply(id: string): Promise<void> {
   } finally {
     repliesInFlight.delete(id);
   }
+}
+
+/** A reply that must not go out any more; no question for anyone. */
+function voidReply(reply: WorkItemReply, reason: string): void {
+  const waiting = replyTimers.get(reply.id);
+  if (waiting) {
+    clearTimeout(waiting.timer);
+    replyTimers.delete(reply.id);
+  }
+  updateWorkItemReply(reply.id, { status: 'failed', error: reason }, now());
+  logger.info(
+    { replyId: reply.id, workItemId: reply.workItemId, reason },
+    'Team reply voided',
+  );
 }
 
 /**
@@ -1208,6 +1238,8 @@ function settleReplyFailed(reply: WorkItemReply, error: string): void {
   );
   const item = reply.workItemId ? getWorkItem(reply.workItemId) : undefined;
   if (!item) return;
+  // The reason is an event of its own; the item's open question (if any)
+  // stays as it is, and an ended item needs nobody.
   recordWorkEvent({
     workItemId: item.id,
     kind: 'reply',
@@ -1216,12 +1248,17 @@ function settleReplyFailed(reply: WorkItemReply, error: string): void {
     triggerMessageId: reply.quoteMessageId,
     now: now(),
   });
+  if (item.status !== 'open' || item.attention) {
+    broadcast(item);
+    return;
+  }
   const label = PURPOSE_LABEL[reply.purpose] ?? '回复';
-  const updated = patchItem(item, {
-    attention: `群里的${label}没有发出（${error.slice(0, 120)}），请在 Web 上查看并处理。`,
-    attentionMessageId: null,
-  });
-  broadcast(updated);
+  broadcast(
+    patchItem(item, {
+      attention: `群里的${label}没有发出，请在 Web 上查看并处理。`,
+      attentionMessageId: null,
+    }),
+  );
 }
 
 // One accept at a time per trigger: a retried tool call never creates two
@@ -1622,7 +1659,7 @@ function acknowledge(
 /** The last report a result answers (ready, blocked or failed), if any. */
 function lastResultReportId(item: WorkItem): number | null {
   const last = listWorkEvents(item.id, 200)
-    .filter((event) => event.kind === 'report')
+    .filter((event) => event.kind === 'report' && event.state !== 'undelivered')
     .at(-1);
   return last &&
     (last.state === 'ready' ||
@@ -2006,7 +2043,7 @@ export function countOpenWorkItems(channelJid: string): number {
 
 /**
  * Refuse a team session's IPC that would reach a chat or the Feishu API
- * beyond reading. Team sessions speak only through the team tools; of the
+ * beyond reading, or schedule an automation. Team sessions speak only through the team tools; of the
  * Feishu capabilities they keep exactly the reads (an allowlist, so a new
  * capability stays refused until it is added here). Null when allowed.
  */
@@ -2015,6 +2052,8 @@ export function teamIpcRefusal(
   operation: string | undefined,
 ): string | null {
   if (type === 'send_file') return TEAM_SESSION_TOOL_REFUSAL;
+  // A team session's work is a work item: it schedules nothing.
+  if (isAutomationIpcType(type)) return TEAM_SESSION_AUTOMATION_REFUSAL;
   if (type === 'feishu_capability') {
     return operation && TEAM_FEISHU_READ_OPERATIONS.has(operation)
       ? null
@@ -2029,6 +2068,9 @@ const TEAM_FEISHU_READ_OPERATIONS: ReadonlySet<string> = new Set([
   'get_user',
   'get_history',
 ]);
+
+const TEAM_SESSION_AUTOMATION_REFUSAL =
+  'Team-mode sessions do not use automations; a recurring need is a request for the router.';
 
 const TEAM_SESSION_TOOL_REFUSAL =
   'Team-mode sessions only read from Feishu. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';

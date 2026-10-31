@@ -18,7 +18,10 @@
  * the same decision back from a small cache keyed by chat and message, so the
  * gate and the route can never disagree.
  */
+import { randomBytes } from 'crypto';
+
 import { escapeXml } from './message-prompt.js';
+import type { NewMessage } from './types.js';
 import {
   admitMessage,
   subscriptionKey,
@@ -364,39 +367,102 @@ function teamInputFrame(
   return { before: header, after: '' };
 }
 
+const NUL = /\u0000/g;
+
+function withoutNul(value: string): string {
+  return value.includes('\u0000') ? value.replace(NUL, '') : value;
+}
+
+/**
+ * A message's own text fields without NUL characters: the body, the sender
+ * name and quoted or forwarded context, everything the formatter may print.
+ */
+function scrubbed<
+  T extends {
+    content: string;
+    sender_name: string;
+    channel_context?: NewMessage['channel_context'];
+  },
+>(message: T): T {
+  const references = message.channel_context?.message.referencedMessages;
+  const dirty =
+    message.content.includes('\u0000') ||
+    message.sender_name.includes('\u0000') ||
+    !!references?.some(
+      (reference) =>
+        reference.text.includes('\u0000') ||
+        !!reference.sender?.includes('\u0000') ||
+        !!reference.attachmentHints?.some((hint) => hint.includes('\u0000')),
+    );
+  if (!dirty) return message;
+  return {
+    ...message,
+    content: withoutNul(message.content),
+    sender_name: withoutNul(message.sender_name),
+    ...(message.channel_context && references
+      ? {
+          channel_context: {
+            ...message.channel_context,
+            message: {
+              ...message.channel_context.message,
+              referencedMessages: references.map((reference) => ({
+                ...reference,
+                text: withoutNul(reference.text),
+                ...(reference.sender
+                  ? { sender: withoutNul(reference.sender) }
+                  : {}),
+                ...(reference.attachmentHints
+                  ? {
+                      attachmentHints:
+                        reference.attachmentHints.map(withoutNul),
+                    }
+                  : {}),
+              })),
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 /**
  * Format a batch with each team input framed by its header. The formatter
  * escapes and neutralizes every body as usual; the frame is put around the
- * body through tokens it leaves alone, and a body of anyone else's cannot
- * carry such a token, so a person cannot forge a header.
+ * body through tokens it leaves alone. A token carries a random nonce drawn
+ * for this formatting, and every text a person controls (bodies, sender
+ * names, quoted and forwarded context) is stripped of the NUL a token starts
+ * with, so a person can neither guess nor type one: no header can be forged.
  */
 export function formatWithTeamInputs<
-  T extends { content: string; sender_name: string; attachments?: string },
+  T extends {
+    content: string;
+    sender_name: string;
+    attachments?: string;
+    channel_context?: NewMessage['channel_context'];
+  },
 >(messages: T[], format: (messages: T[]) => string): string {
   const frames: { before: string; after: string }[] = [];
-  const prepared = messages.map((message) => {
-    const content = message.content.includes('\u0000')
-      ? message.content.replace(/\u0000/g, '')
-      : message.content;
+  const nonce = randomBytes(12).toString('hex');
+  const prepared = messages.map((original) => {
+    const message = scrubbed(original);
     const item = readTeamInput(message.attachments);
-    if (!item) {
-      return content === message.content ? message : { ...message, content };
-    }
+    if (!item) return message;
     const index = frames.push(teamInputFrame(item, message.sender_name)) - 1;
-    const body = item.tag === 'work_approved' ? '' : content;
+    const body = item.tag === 'work_approved' ? '' : message.content;
     return {
       ...message,
       // The body starts a line of its own, as in any lane: an `@` at its
       // start is neutralized (forwarded material) or read (a person's own
       // file reference) exactly as the formatter decides.
-      content: `\u0000team-before:${index}\u0000\n${body}\u0000team-after:${index}\u0000`,
+      content: `\u0000${nonce}:before:${index}\u0000\n${body}\u0000${nonce}:after:${index}\u0000`,
     };
   });
   if (frames.length === 0) return format(prepared);
+  const token = new RegExp(`\u0000${nonce}:(before|after):(\\d+)\u0000`, 'g');
   return format(prepared).replace(
-    /\u0000team-(before|after):(\d+)\u0000/g,
-    (token, side: 'before' | 'after', index: string) =>
-      frames[Number(index)]?.[side] ?? token,
+    token,
+    (match, side: 'before' | 'after', index: string) =>
+      frames[Number(index)]?.[side] ?? match,
   );
 }
 
