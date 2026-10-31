@@ -627,15 +627,17 @@ import {
   countOpenWorkItems,
   followupCopyIdsOf,
   handleWorkIpc,
-  hasWorkerSession,
-  isTeamBotMessage,
-  isTeamListed,
   isWorkIpcType,
   onTeamMessageStored,
+  reconcileTeamGroup,
   resolveTeamGroup,
   resolveTeamRole,
+  resumePendingTeamReplies,
+  teamGateDeps,
   teamInputItemFor,
+  teamIpcRefusal,
   teamRoleKey,
+  type TeamGroupContext,
 } from './work-item-service.js';
 import {
   deliverTeamReplyThroughOutbox,
@@ -644,7 +646,7 @@ import {
   type TeamReplyOutcome,
   type TeamReplyRequest,
 } from './work-item-runtime.js';
-import { findSubscribedWorkItems } from './work-item-store.js';
+import { getWorkItem } from './work-item-store.js';
 import type { TeamRole } from './work-items.js';
 import { installSkillForUser, deleteSkillForUser } from './routes/skills.js';
 import { skillMutationTurnRejection } from './skill-ipc-authorization.js';
@@ -4093,6 +4095,17 @@ async function deliverIndependentChannelSystemNotice(input: {
     threadId?: string | null;
   };
 }): Promise<boolean> {
+  // A team-mode lane never posts framework notices to its group: only the
+  // team tools speak there. The notice stays in the lane's Web transcript.
+  if (resolveTeamRole(agentIdOfJid(input.logicalChatJid))) {
+    if (input.projectToWeb !== false) {
+      await sendMessageWithOutcome(input.logicalChatJid, input.text, {
+        sendToIM: false,
+        messageId: `sys_notice_${input.originalInputTurnId}:${input.noticeKey}`,
+      });
+    }
+    return true;
+  }
   const noticeRuntime = ChannelTurnRuntime.start({
     ...input.route,
     externalMessageId: `${input.originalInputTurnId}:system-notice:${input.noticeKey}`,
@@ -4350,9 +4363,11 @@ function deliverTeamReply(
 ): Promise<TeamReplyOutcome> {
   const route = resolveDurableChannelRoute(request.channelJid);
   if (!route || route.provider !== 'feishu') {
+    // The account may not be connected yet: try again later.
     return Promise.resolve({
       ok: false,
       error: 'The group has no Feishu delivery route.',
+      retryable: true,
     });
   }
   return deliverTeamReplyThroughOutbox(request, route, (context, capability) =>
@@ -6343,6 +6358,19 @@ async function activateBatchProcessingIndicators(
   return owners;
 }
 
+/**
+ * Team mode: an inferred candidate is a message nobody addressed to the bot;
+ * the router judging it shows nothing in the group. Explicit candidates and
+ * work item follow-ups get the usual OnIt.
+ */
+function isQuietTeamInput(laneJid: string, inputId: string): boolean {
+  const input = getAgentBuilderInputMessage(laneJid, inputId);
+  const header = input ? readTeamInput(input.attachments) : null;
+  return (
+    header?.tag === 'team_candidate' && header.facts?.strength === 'inferred'
+  );
+}
+
 function beginBatchAckReactions(
   logicalJid: string,
   owners: ProcessingIndicatorOwner[],
@@ -6350,7 +6378,8 @@ function beginBatchAckReactions(
   const reactable = owners.filter(
     (owner) =>
       getChannelType(owner.transportJid) === 'feishu' &&
-      isProviderAcknowledgeableInputId(owner.transportJid, owner.inputTurnId),
+      isProviderAcknowledgeableInputId(owner.transportJid, owner.inputTurnId) &&
+      !isQuietTeamInput(logicalJid, owner.inputTurnId),
   );
   if (reactable.length === 0) return Promise.resolve();
   return runAckIndicatorOp(logicalJid, async () => {
@@ -12457,8 +12486,11 @@ function startIpcWatcher(): void {
     }
 
     for (const { path: ipcRoot, agentId: ipcAgentId } of ipcRoots) {
-      // Team-mode sessions never message a chat themselves.
-      const ipcTeamSession = !!resolveTeamRole(ipcAgentId);
+      // Team-mode sessions never message a chat themselves. Looked up only
+      // once this root has a message to judge.
+      let ipcTeamSessionMemo: boolean | undefined;
+      const ipcTeamSession = (): boolean =>
+        (ipcTeamSessionMemo ??= !!resolveTeamRole(ipcAgentId));
       const messagesDir = path.join(ipcRoot, 'messages');
       const messageResultsDir = path.join(ipcRoot, 'message-results');
       const tasksDir = path.join(ipcRoot, 'tasks');
@@ -12596,7 +12628,7 @@ function startIpcWatcher(): void {
                   deliveryRole: data.deliveryRole,
                   authorized,
                   interactionMode: ipcInteractionMode,
-                  teamSession: ipcTeamSession,
+                  teamSession: ipcTeamSession(),
                   // The channel the input came from, recorded when its turn
                   // was bound, and whether its own reply route is still open.
                   turnSource:
@@ -13085,7 +13117,7 @@ function startIpcWatcher(): void {
                         'Message could not be delivered to its target.',
                     },
               );
-            } else if (data.type === 'image' && ipcTeamSession) {
+            } else if (data.type === 'image' && ipcTeamSession()) {
               // Team-mode sessions never post to a chat themselves.
               messageResultWritten = writeIpcMessageResult(
                 messageResultsDir,
@@ -14085,28 +14117,32 @@ async function processTaskIpc(
   if (isWorkIpcType(data.type)) {
     // The caller is the IPC namespace the request was read from, never the
     // body; the service refuses a router tool from a non-router lane and a
-    // worker tool from a non-worker lane.
-    const result = await handleWorkIpc(
+    // worker tool from a non-worker lane. Not awaited: an accept that
+    // creates a worktree must not hold up the other requests of this sweep.
+    const type = data.type;
+    void handleWorkIpc(
       { folder: sourceGroup, agentId: ipcAgentId },
       data as unknown as { type: string } & Record<string, unknown>,
+    ).then((result) =>
+      writeTaskResult(tasksDir, type, data.requestId, { ...result }),
     );
-    writeTaskResult(tasksDir, data.type, data.requestId, { ...result });
     return;
   }
-  if (
-    (data.type === 'send_file' ||
-      (data.type === 'feishu_capability' && data.operation === 'send_card')) &&
-    resolveTeamRole(ipcAgentId)
-  ) {
-    logger.warn(
-      { sourceGroup, agentId: ipcAgentId, type: data.type },
-      'Rejected an IM-sending tool from a team-mode session',
-    );
-    writeTaskResult(tasksDir, data.type, data.requestId, {
-      success: false,
-      error: TEAM_SESSION_IM_REFUSAL,
-    });
-    return;
+  if (data.type === 'send_file' || data.type === 'feishu_capability') {
+    const refusal = resolveTeamRole(ipcAgentId)
+      ? teamIpcRefusal(data.type, data.operation)
+      : null;
+    if (refusal) {
+      logger.warn(
+        { sourceGroup, agentId: ipcAgentId, type: data.type },
+        'Rejected a Feishu tool a team-mode session may not use',
+      );
+      writeTaskResult(tasksDir, data.type, data.requestId, {
+        success: false,
+        error: refusal,
+      });
+      return;
+    }
   }
   if (isLegacyTaskIpcType(data.type)) {
     writeTaskResult(tasksDir, data.type, data.requestId, {
@@ -15806,11 +15842,16 @@ async function processAgentConversation(
   const imagesForAgent = images.length > 0 ? images : undefined;
   // Session bindings share context; each input retains its own reply route.
   // A quiet automation run keeps its IM route aside (see processGroupMessages).
-  let replySourceImJid = automationTurns.holdReplyRoute(
-    lastProcessed.id,
-    missedMessages,
-    resolveBatchChannelReplySource(missedMessages),
-  );
+  // A team-mode lane has none at all: it speaks only through the team tools,
+  // and every framework notice of its turns (usage-limit waits, failures)
+  // stays in the Web.
+  let replySourceImJid = teamRole
+    ? null
+    : automationTurns.holdReplyRoute(
+        lastProcessed.id,
+        missedMessages,
+        resolveBatchChannelReplySource(missedMessages),
+      );
   const initialAgentReplySourceImJid = replySourceImJid;
   if (replySourceImJid) {
     // Publish to activeImReplyRoutes so send_file/send_image IPC can route to IM.
@@ -16626,11 +16667,13 @@ async function processAgentConversation(
       const admittedMessages = (coveredInputs ?? [])
         .map((input) => getAgentBuilderInputMessage(virtualChatJid, input.id))
         .filter((message) => message !== null);
-      const targetSourceJid = automationTurns.holdReplyRoute(
-        inputTurnId,
-        admittedMessages,
-        resolveInputChannelReplySource(newSourceJid),
-      );
+      const targetSourceJid = teamRole
+        ? null
+        : automationTurns.holdReplyRoute(
+            inputTurnId,
+            admittedMessages,
+            resolveInputChannelReplySource(newSourceJid),
+          );
       let nextRuntime: ChannelTurnRuntime | undefined;
       let nextScope: ActiveChannelOutboxScope | undefined;
       let nextLifecycle: typeof activeAgentDurableCardLifecycle;
@@ -16771,9 +16814,11 @@ async function processAgentConversation(
     if (inputTurnId && !admittedInput) return;
     const admittedAgentLifecycle = admittedInput?.lifecycle;
     const agentInputAdmitted = !!admittedInput;
-    const targetSourceJid = admittedInput
-      ? admittedInput.imJid
-      : resolveInputChannelReplySource(newSourceJid);
+    const targetSourceJid = teamRole
+      ? null
+      : admittedInput
+        ? admittedInput.imJid
+        : resolveInputChannelReplySource(newSourceJid);
     if (inputTurnId) {
       activeAgentInputTurnId = inputTurnId;
       bindAgentTurnOutputCoordinator(inputTurnId);
@@ -20689,36 +20734,27 @@ function resolveFeishuConversationPlanForMessage(
 // ── Team mode (团队模式): gate, route and post-store ──────────────────────
 
 /**
- * Where a message of a team-mode group goes (team-gate.ts), decided once per
- * message before the @ gate. The decision is remembered for the inbound
- * router and the post-store hook; the plan carries what the connector needs:
- * whether to pass the @ gate, and the header the stored message carries.
- * Undefined outside team mode (and for lookups without a sender, like card
- * callbacks), so nothing changes there.
+ * Decide where a message of a team-mode group goes (team-gate.ts) and
+ * remember it for the inbound router. Null outside team mode, and for a
+ * lookup without a sender (card callbacks), which no team rule can judge.
  */
-function resolveTeamPlan(
+function decideTeamMessage(
   chatJid: string,
   meta: ChannelMessageMeta,
-): FeishuConversationPlan['team'] {
-  if (meta.chatType !== 'group' || !meta.messageId) return undefined;
-  if (!meta.senderImId && !meta.senderIsBot) return undefined;
+): { context: TeamGroupContext; decision: TeamInboundDecision } | null {
+  if (meta.chatType !== 'group' || !meta.messageId) return null;
+  if (!meta.senderImId && !meta.senderIsBot) return null;
   const context = resolveTeamGroup(chatJid);
-  if (!context) return undefined;
-  const message = {
-    messageId: meta.messageId,
-    parentId: meta.parentId,
-    rootId: meta.rootId,
-    threadId: meta.threadId,
-    senderImId: meta.senderImId,
-    senderIsBot: meta.senderIsBot,
-    mentionedBot: meta.mentionedBot === true,
-  };
-  let decision: TeamInboundDecision = decideTeamInbound(context, message, {
-    findSubscribedItems: findSubscribedWorkItems,
-    isListed: (sender) => isTeamListed(context, sender),
-    isOwnBotMessage: (id) => isTeamBotMessage(context, id),
-    hasWorker: hasWorkerSession,
-  });
+  if (!context) {
+    // A group rebound away from its team-mode workspace ends its items.
+    reconcileTeamGroup(chatJid);
+    return null;
+  }
+  let decision = decideTeamInbound(
+    context,
+    teamInboundMessage(meta),
+    teamGateDeps(context),
+  );
   if (decision.kind === 'candidate' && !decision.routerAgentId) {
     logger.warn(
       { chatJid, messageId: meta.messageId },
@@ -20731,17 +20767,65 @@ function resolveTeamPlan(
     { chatJid, messageId: meta.messageId, team: decision.kind },
     'Team mode routed a group message',
   );
-  const inputItem = teamInputItemFor(decision, message, context.settings);
-  return { outcome: decision.kind, ...(inputItem ? { inputItem } : {}) };
+  return { context, decision };
 }
 
-/** The lane a team-mode group message was routed to by its decision. */
+function teamInboundMessage(meta: ChannelMessageMeta) {
+  return {
+    messageId: meta.messageId ?? '',
+    parentId: meta.parentId,
+    rootId: meta.rootId,
+    threadId: meta.threadId,
+    senderImId: meta.senderImId,
+    senderIsBot: meta.senderIsBot,
+    mentionedBot: meta.mentionedBot === true,
+  };
+}
+
+/**
+ * The team part of a group message's conversation plan: whether it passes
+ * the @ gate (decided now, before commands and the gate run), and the header
+ * the stored message carries. The header is read when the connector stores
+ * the message, from the decision the router used by then, so the two never
+ * disagree even when routing had to decide again.
+ */
+function resolveTeamPlan(
+  chatJid: string,
+  meta: ChannelMessageMeta,
+): FeishuConversationPlan['team'] {
+  const decided = decideTeamMessage(chatJid, meta);
+  if (!decided) return undefined;
+  const { context } = decided;
+  const message = teamInboundMessage(meta);
+  return {
+    outcome: decided.decision.kind,
+    get inputItem() {
+      const decision =
+        recallTeamDecision(chatJid, message.messageId) ?? decided.decision;
+      return teamInputItemFor(decision, message, context.settings) ?? undefined;
+    },
+  };
+}
+
+/**
+ * The lane a team-mode group message goes to. The decision the gate made is
+ * used when it still holds; when it is gone (evicted, another path) or its
+ * first item was stopped meanwhile, the message is decided again now. In a
+ * team-mode group a message no lane takes is rejected: it never falls back
+ * to the workspace's main session. Null outside team mode.
+ */
 function resolveTeamRoute(
   chatJid: string,
   meta: ChannelMessageMeta | undefined,
-): { effectiveJid: string; agentId: string } | null {
-  const decision = recallTeamDecision(chatJid, meta?.messageId);
-  if (!decision || decision.kind === 'ignore') return null;
+): { effectiveJid: string; agentId: string } | 'reject' | null {
+  if (!resolveTeamGroup(chatJid)) return null;
+  let decision = recallTeamDecision(chatJid, meta?.messageId);
+  if (decision?.kind === 'subscribed') {
+    const primary = getWorkItem(decision.items[0].id);
+    if (!primary || primary.outcome === 'stopped') decision = undefined;
+  }
+  decision ??= meta ? decideTeamMessage(chatJid, meta)?.decision : undefined;
+  if (!decision || decision.kind === 'ignore') return 'reject';
   const agentId =
     decision.kind === 'subscribed'
       ? decision.items[0].agentId
@@ -20750,36 +20834,21 @@ function resolveTeamRoute(
 }
 
 /**
- * A routed team-mode message is stored: give further subscribed items their
- * copies and resume ended items. Only the real message of a remembered
- * decision does anything; composed inputs never have one.
+ * Every stored IM message is announced to the Web; a team-mode follow-up
+ * also fans out to the further items it reaches (copies, resumes, delivery
+ * records). Runs where the connector stores a message, including a forward
+ * whose companion note subsumed it and a root held for its note.
  */
-function afterTeamMessageStored(
-  targetJid: string,
-  sourceJid: string,
-  messageId: string,
+function onImMessagePersisted(
+  ...[jid, message, agentId]: Parameters<typeof broadcastNewMessage>
 ): void {
-  const decision = recallTeamDecision(
-    channelConversationJid(sourceJid),
-    messageId,
-  );
-  if (decision?.kind !== 'subscribed') return;
-  const row = getAgentBuilderInputMessage(targetJid, messageId);
-  if (!row) return;
-  const facts = readTeamInput(row.attachments)?.facts ?? {};
+  broadcastNewMessage(jid, message, agentId);
+  if (!agentId || !readTeamInput(message.attachments)) return;
   try {
-    onTeamMessageStored(decision, {
-      id: messageId,
-      content: row.content,
-      sender_name: row.sender_name ?? '',
-      source_jid: row.source_jid ?? sourceJid,
-      senderImId: facts.senderImId,
-      threadId: facts.threadId,
-      mentionedBot: facts.addressed,
-    });
+    onTeamMessageStored(jid, message.id);
   } catch (err) {
     logger.error(
-      { err, targetJid, messageId },
+      { err, laneJid: jid, messageId: message.id },
       'Team mode follow-up fan-out failed',
     );
   }
@@ -21231,7 +21300,6 @@ function handleIncomingFollowUp(input: {
   requestedMode?: FollowUpMode;
   coalesceBundleId?: string;
 }): import('./types.js').FollowUpDisposition {
-  afterTeamMessageStored(input.targetJid, input.sourceJid, input.messageId);
   const activeRunId = queue.getActiveQueryId(input.targetJid);
   if (!activeRunId) return { disposition: 'started' };
   const hasEarlierBundleComment = input.coalesceBundleId
@@ -21945,6 +22013,40 @@ async function handleSessionBreak(input: {
   );
   if (!targetJid) return '当前绑定目标不存在，无法执行 /break。';
 
+  const { activeRunId, interrupted, cancelled } = breakLane(
+    targetJid,
+    'Input cancelled by /break',
+  );
+
+  logger.info(
+    {
+      sourceJid: input.sourceJid,
+      targetJid,
+      senderImId: input.senderImId,
+      activeRunId,
+      interrupted,
+      cancelledMessageIds: cancelled.map((item) => item.id),
+    },
+    'Session break processed',
+  );
+  return interrupted || cancelled.length > 0
+    ? 'Current task stopped.'
+    : 'No active task to stop.';
+}
+
+/**
+ * `/break` on a lane: withdraw every input it has not run yet (cut off now)
+ * and interrupt the turn it runs. Also how a stopped work item's worker
+ * lane is stopped.
+ */
+function breakLane(
+  targetJid: string,
+  reason: string,
+): {
+  activeRunId: string | null;
+  interrupted: boolean;
+  cancelled: ReturnType<typeof cancelQueuedFollowUpsAtCutoff>;
+} {
   const deliveryUpdatedAt = new Date().toISOString();
   const cancelled = cancelQueuedFollowUpsAtCutoff(targetJid, deliveryUpdatedAt);
   cancelAutomationInputs(cancelled, 'break');
@@ -21969,7 +22071,7 @@ async function handleSessionBreak(input: {
     closeRetryWaitTurnsForWithdrawnInputs(
       channelTurnScopeForInput(targetJid, item.source_jid),
       [item.id],
-      'Input cancelled by /break',
+      reason,
     );
   }
   // The cutoff took the inputs a usage-limit wait had parked.
@@ -21979,21 +22081,7 @@ async function handleSessionBreak(input: {
     targetJid,
     '/break',
   );
-
-  logger.info(
-    {
-      sourceJid: input.sourceJid,
-      targetJid,
-      senderImId: input.senderImId,
-      activeRunId,
-      interrupted,
-      cancelledMessageIds: cancelled.map((item) => item.id),
-    },
-    'Session break processed',
-  );
-  return interrupted || cancelled.length > 0
-    ? 'Current task stopped.'
-    : 'No active task to stop.';
+  return { activeRunId, interrupted, cancelled };
 }
 
 async function handleFeishuSessionClear(input: {
@@ -22218,7 +22306,7 @@ async function reloadChannelAccountById(accountId: string): Promise<boolean> {
     accountId: account.id,
     scopeIncomingJids: !account.is_legacy_default,
     ignoreMessagesBefore: Date.now(),
-    onMessagePersisted: broadcastNewMessage,
+    onMessagePersisted: onImMessagePersisted,
     // Every connector offers its inputs to the durable follow-up queue and
     // parses `/steer` and `/break` (CLAUDE.md §4, §6.4).
     onFollowUpMessage: handleIncomingFollowUp,
@@ -23792,8 +23880,8 @@ async function main(): Promise<void> {
       buildOnAgentMessage()(workspaceJid, agentId),
     broadcastNewMessage: (laneJid, message) =>
       broadcastNewMessage(laneJid, message),
-    interruptLane: (laneJid) => {
-      if (queue.getActiveQueryId(laneJid)) queue.interruptQuery(laneJid);
+    stopLane: (laneJid) => {
+      breakLane(laneJid, 'Input cancelled: work item stopped');
     },
     postReply: deliverTeamReply,
     postLaneMessage: async (laneJid, text, messageId) => {
@@ -24098,6 +24186,9 @@ async function main(): Promise<void> {
   // rewound/discarded and conversation recovery has normalized its cursors.
   // Otherwise an overdue run can race startup recovery with a fresh Runner.
   automationScheduler?.start();
+  // Team mode: replies owed to groups before the restart are sent now (a
+  // channel not connected yet is retried with backoff).
+  resumePendingTeamReplies();
   streamingBuffer.start();
   startMessageLoop();
 

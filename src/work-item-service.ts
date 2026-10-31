@@ -13,11 +13,13 @@
  */
 import crypto from 'crypto';
 
+import { channelConversationJid } from './channel-address.js';
 import { resolveChannelConversationKind } from './channel-conversation-kind.js';
 import {
   getAgent,
   getAgentBuilderInputMessage,
   getChannelMount,
+  getMessageChannelTurnContext,
   getRegisteredGroup,
   listChannelMountsByWorkspace,
 } from './db.js';
@@ -36,11 +38,18 @@ import {
   followupInputItem,
   readTeamInput,
   teamTriggerKeys,
+  canResumeWorkItem,
+  forgetTeamDecisions,
+  type TeamGateDeps,
   type TeamGateGroup,
   type TeamInboundDecision,
   type TeamInputItem,
 } from './team-gate.js';
-import type { ChannelMount, NewMessage, RegisteredGroup } from './types.js';
+import type {
+  ChannelMount,
+  ChannelTurnContext,
+  RegisteredGroup,
+} from './types.js';
 import {
   getTeamMount,
   getTeamMountByRouter,
@@ -48,11 +57,21 @@ import {
   getWorkItem,
   getWorkItemByAgent,
   getWorkItemBySource,
+  countWorkItemsByChannel,
+  findSubscribedWorkItems,
+  getWorkItemReply,
+  hasWorkEvent,
   insertWorkItem,
+  insertWorkItemReply,
+  isWorkItemReplyMessage,
+  listPendingWorkItemReplies,
   listWorkDecisions,
   listWorkEvents,
   listWorkItems,
+  listWorkItemsByChannel,
   listWorkItemSubscriptions,
+  updateWorkItemReply,
+  type WorkItemReply,
   recordWorkDecision,
   recordWorkEvent,
   saveTeamMountSettings as storeTeamMountSettings,
@@ -73,9 +92,9 @@ import {
   admitMessage,
   countImWords,
   deriveWorkStage,
+  imTextLimitError,
   parseTeamSettings,
   subscriptionKey,
-  TEAM_IM_WORD_LIMIT,
   TEAM_RULE_LIMIT,
   TEAM_RULE_TEXT_LIMIT,
   WORK_IPC_TYPES,
@@ -195,17 +214,35 @@ export function isTeamListed(
   );
 }
 
-/** One of the bot's own messages in the group: stored in its router lane. */
+/**
+ * One of the bot's own messages in the group: a team reply the host posted
+ * (the router's or a worker's acknowledgement), or a bot message stored in
+ * the router lane.
+ */
 export function isTeamBotMessage(
   context: TeamGroupContext,
   messageId: string,
 ): boolean {
+  if (isWorkItemReplyMessage(context.channelJid, messageId)) return true;
   if (!context.routerAgentId) return false;
   const row = getAgentBuilderInputMessage(
     laneJidOf(context.workspaceJid, context.routerAgentId),
     messageId,
   );
   return row?.is_from_me === 1;
+}
+
+/** Gate lookups for one team-mode group. */
+export function teamGateDeps(context: TeamGroupContext): TeamGateDeps {
+  return {
+    findSubscribedItems: (channelJid, keys) =>
+      findSubscribedWorkItems(channelJid, keys, context.workspaceJid),
+    isListed: (sender) => isTeamListed(context, sender),
+    isOwnBotMessage: (id) => isTeamBotMessage(context, id),
+    hasWorker: hasWorkerSession,
+    wasHandedBack: (itemId, messageId) =>
+      hasWorkEvent(itemId, 'handback', messageId),
+  };
 }
 
 export function hasWorkerSession(item: WorkItem): boolean {
@@ -309,12 +346,16 @@ function resumeItem(item: WorkItem, triggerMessageId: string): WorkItem {
   return resumed;
 }
 
-/** Note that a group message reached an item (work_ack, work_handback check it). */
+/**
+ * Note that a group message reached an item (work_ack, work_handback check
+ * it). Once per message: a replay records nothing. Returns whether it was new.
+ */
 function noteDelivery(
   item: WorkItem,
   triggerMessageId: string,
   text?: string,
-): void {
+): boolean {
+  if (hasWorkEvent(item.id, 'input', triggerMessageId)) return false;
   recordWorkEvent({
     workItemId: item.id,
     kind: 'input',
@@ -322,6 +363,7 @@ function noteDelivery(
     triggerMessageId,
     now: now(),
   });
+  return true;
 }
 
 /** A group message for an item it was not routed to: a `<work_followup>` copy. */
@@ -333,8 +375,12 @@ function deliverFollowupCopy(
     senderName?: string;
     sourceJid?: string | null;
     senderImId?: string;
+    senderIsBot?: boolean;
     threadId?: string;
+    listed: boolean;
     addressed: boolean;
+    /** The original's provider context: quotes and forwards read the same. */
+    channelContext?: ChannelTurnContext | null;
   },
 ): void {
   injectTeamInput({
@@ -344,11 +390,14 @@ function deliverFollowupCopy(
     content: message.content,
     senderName: message.senderName || undefined,
     sourceJid: message.sourceJid ?? item.channelJid,
+    channelContext: message.channelContext,
     item: followupInputItem({
       item,
       triggerMessageId: message.id,
+      listed: message.listed,
       addressed: message.addressed,
       senderImId: message.senderImId,
+      senderIsBot: message.senderIsBot,
       threadId: message.threadId,
     }),
   });
@@ -456,7 +505,8 @@ export async function saveTeamMountSettings(
   let routerAgentId = current?.routerAgentId ?? null;
   const router = routerAgentId ? getAgent(routerAgentId) : undefined;
   if (!router || router.chat_jid !== workspaceJid) routerAgentId = null;
-  if (next.enabled && !routerAgentId) {
+  const newRouter = next.enabled && !routerAgentId;
+  if (newRouter) {
     const chatName = getRegisteredGroup(channelJid)?.name || '飞书群';
     const session = await createConversationSession({
       workspaceJid,
@@ -475,6 +525,12 @@ export async function saveTeamMountSettings(
     updatedBy: actor.userId,
     now: now(),
   });
+  // Decisions made under the old settings route nothing any more.
+  forgetTeamDecisions(channelJid);
+  if (!next.enabled) stopGroupWorkItems(channelJid, 'team_mode_off');
+  if (newRouter && routerAgentId) {
+    redeliverReportsToRouter(channelJid, workspaceJid, routerAgentId);
+  }
   logger.info(
     {
       channelJid,
@@ -486,6 +542,96 @@ export async function saveTeamMountSettings(
     'Team mode settings saved',
   );
   return saved;
+}
+
+/**
+ * End every open item of a group that no longer runs team mode here (team
+ * mode turned off, the group rebound to another workspace or session).
+ * Nothing can route to them any more.
+ */
+export function stopGroupWorkItems(channelJid: string, reason: string): void {
+  for (const item of listWorkItemsByChannel(channelJid, {
+    status: 'open',
+    limit: 500,
+  })) {
+    broadcast(stopItem(item, reason));
+  }
+}
+
+/**
+ * A group with team mode on that no longer qualifies (rebound to another
+ * workspace or session, or no longer an ordinary group) stops its items once.
+ */
+export function reconcileTeamGroup(channelJid: string): void {
+  const team = getTeamMount(channelJid);
+  if (!team?.settings.enabled) return;
+  if (!teamMountIneligibility(channelJid, team.workspaceJid)) return;
+  if (countWorkItemsByChannel(channelJid, 'open') === 0) return;
+  stopGroupWorkItems(channelJid, 'group_rebound');
+}
+
+/** Report states the router acts on; `progress` only updates the item. */
+function forwardsReport(state: string, humanAction: string | null): boolean {
+  return (state !== 'progress' || !!humanAction) && state !== 'dropped';
+}
+
+function reportInputId(itemId: string, eventId: number | null): string {
+  return `work-report-${itemId}-${eventId}`;
+}
+
+function injectReport(
+  item: WorkItem,
+  routerAgentId: string,
+  report: { eventId: number | null; state: string; summary: string },
+): void {
+  injectTeamInput({
+    workspaceJid: item.workspaceJid,
+    agentId: routerAgentId,
+    messageId: reportInputId(item.id, report.eventId),
+    content: report.summary,
+    item: {
+      tag: 'work_report',
+      attrs: [
+        ['item', `#${item.seq}`],
+        ['id', item.id],
+        ['state', report.state],
+        ['attention', item.attention ?? ''],
+      ],
+      facts: { workItemId: item.id },
+    },
+  });
+}
+
+/**
+ * A new router session gets the last report of each open item of its group
+ * that a router would act on, so nothing reported while there was none (or
+ * to the one before) is lost.
+ */
+function redeliverReportsToRouter(
+  channelJid: string,
+  workspaceJid: string,
+  routerAgentId: string,
+): void {
+  for (const item of listWorkItemsByChannel(channelJid, {
+    status: 'open',
+    limit: 500,
+  })) {
+    if (item.workspaceJid !== workspaceJid) continue;
+    const last = listWorkEvents(item.id, 200)
+      .filter(
+        (event) =>
+          event.kind === 'report' &&
+          event.state !== 'undelivered' &&
+          forwardsReport(event.state ?? '', item.attention),
+      )
+      .at(-1);
+    if (!last) continue;
+    injectReport(item, routerAgentId, {
+      eventId: last.id,
+      state: last.state ?? '',
+      summary: last.text,
+    });
+  }
 }
 
 export function listWorkItemViews(
@@ -511,12 +657,13 @@ function requireItem(id: string): WorkItem {
   return item;
 }
 
-function stopItem(item: WorkItem, by: string, interrupt = true): WorkItem {
+function stopItem(item: WorkItem, by: string, stopLane = true): WorkItem {
   const stopped = endItem(item, 'stopped', { attention: null });
   recordWorkEvent({ workItemId: item.id, kind: 'stop', text: by, now: now() });
-  // Stops the turn the worker runs now; queued inputs stay with the session.
-  if (interrupt) {
-    getWorkItemRuntimeHooks().interruptLane(
+  // The worker stops like `/break`: its current turn and every input it has
+  // not run yet.
+  if (stopLane) {
+    getWorkItemRuntimeHooks().stopLane(
       laneJidOf(item.workspaceJid, item.agentId),
     );
   }
@@ -579,6 +726,7 @@ export function teamInputItemFor(
     messageId: string;
     threadId?: string;
     senderImId?: string;
+    senderIsBot?: boolean;
     mentionedBot: boolean;
   },
   settings: TeamSettings,
@@ -589,8 +737,10 @@ export function teamInputItemFor(
     return followupInputItem({
       item: primary,
       triggerMessageId: message.messageId,
+      listed: decision.listed,
       addressed: message.mentionedBot,
       senderImId: message.senderImId,
+      senderIsBot: message.senderIsBot,
       threadId: message.threadId,
       copyItemIds: copies.map((item) => item.id),
     });
@@ -603,6 +753,7 @@ export function teamInputItemFor(
     settings,
     threadItems: decision.threadItems,
     senderImId: message.senderImId,
+    senderIsBot: message.senderIsBot,
     threadId: message.threadId,
   });
 }
@@ -613,38 +764,54 @@ export function followupCopyId(messageId: string, workItemId: string): string {
 }
 
 /**
- * A subscribed group message was stored in its first item's lane: resume
- * ended items it reaches, give each further item its copy, and note the
- * delivery on every item (work_ack and work_handback check it).
+ * A group message was stored in a team lane. A follow-up (its stored header
+ * names the items it reaches) resumes the ended items it reaches, gives each
+ * further item its copy and notes the delivery on every item (work_ack and
+ * work_handback check it). Derived from the stored row alone, so it does not
+ * depend on the gate's in-memory decision, and idempotent: a replay of the
+ * same message records, resumes, copies and broadcasts nothing again.
  */
-export function onTeamMessageStored(
-  decision: TeamInboundDecision,
-  message: Pick<NewMessage, 'id' | 'content' | 'sender_name' | 'source_jid'> & {
-    senderImId?: string;
-    threadId?: string;
-    mentionedBot?: boolean;
-  },
-): void {
-  if (decision.kind !== 'subscribed') return;
-  for (const [index, reached] of decision.items.entries()) {
-    let item = getWorkItem(reached.id) ?? reached;
-    if (decision.resumeIds.includes(item.id) && item.status === 'ended') {
-      if (item.outcome === 'stopped') continue;
-      item = resumeItem(item, message.id);
+export function onTeamMessageStored(laneJid: string, messageId: string): void {
+  const row = getAgentBuilderInputMessage(laneJid, messageId);
+  const header = row ? readTeamInput(row.attachments) : null;
+  if (!row || header?.tag !== 'work_followup') return;
+  if (row.source_kind === 'work_item_input') return;
+  const facts = header.facts ?? {};
+  const ids = [facts.workItemId, ...(facts.copyItemIds ?? [])].filter(
+    (id): id is string => !!id,
+  );
+  const context = resolveTeamGroup(
+    row.source_jid ? channelConversationJid(row.source_jid) : '',
+  );
+  const isListed = (sender: string | undefined) =>
+    !!context && isTeamListed(context, sender);
+  const channelContext =
+    ids.length > 1 ? getMessageChannelTurnContext(laneJid, messageId) : null;
+  for (const [index, id] of ids.entries()) {
+    let item = getWorkItem(id);
+    if (!item) continue;
+    let changed = false;
+    if (item.status === 'ended') {
+      if (facts.senderIsBot || !canResumeWorkItem(item, isListed)) continue;
+      item = resumeItem(item, messageId);
+      changed = true;
     }
-    noteDelivery(item, message.id);
+    if (noteDelivery(item, messageId)) changed = true;
     if (index > 0) {
       deliverFollowupCopy(item, {
-        id: message.id,
-        content: message.content,
-        senderName: message.sender_name,
-        sourceJid: message.source_jid,
-        senderImId: message.senderImId,
-        threadId: message.threadId,
-        addressed: message.mentionedBot === true,
+        id: messageId,
+        content: row.content,
+        senderName: row.sender_name ?? undefined,
+        sourceJid: row.source_jid,
+        senderImId: facts.senderImId,
+        senderIsBot: facts.senderIsBot,
+        threadId: facts.threadId,
+        listed: facts.listed === true,
+        addressed: facts.addressed === true,
+        channelContext,
       });
     }
-    broadcast(item);
+    if (changed) broadcast(item);
   }
 }
 
@@ -667,7 +834,11 @@ export function followupCopyIdsOf(
       ids.push(decision.workItemId);
     }
   }
-  return ids.map((id) => followupCopyId(messageId, id));
+  return [
+    ...ids.map((id) => followupCopyId(messageId, id)),
+    // A follow-up a worker handed back waits in the router lane as well.
+    ...(item.tag === 'work_followup' ? [handbackInputId(messageId)] : []),
+  ];
 }
 
 // ── IPC: router and worker tools ───────────────────────────────────────
@@ -708,7 +879,12 @@ function requireRouter(caller: WorkIpcCaller): RouterLane {
     fail('Only a team router session can use this tool.');
   }
   const context = resolveTeamGroup(team.channelJid);
-  if (!context || context.routerAgentId !== agent.id) {
+  if (
+    !context ||
+    context.routerAgentId !== agent.id ||
+    agent.chat_jid !== context.workspaceJid
+  ) {
+    reconcileTeamGroup(team.channelJid);
     fail('Team mode is off for this group.');
   }
   return { context, laneJid: laneJidOf(context.workspaceJid, agent.id) };
@@ -723,18 +899,24 @@ function requireWorker(caller: WorkIpcCaller): WorkItem {
   if (!agent || !item || agent.group_folder !== caller.folder) {
     fail('Only a work item session can use this tool.');
   }
+  // The group must still run team mode, mounted on the item's workspace.
+  const context = resolveTeamGroup(item.channelJid);
+  if (!context || context.workspaceJid !== item.workspaceJid) {
+    reconcileTeamGroup(item.channelJid);
+    fail('Team mode is off for this group.');
+  }
   return item;
+}
+
+function requireOpen(item: WorkItem): void {
+  if (item.status !== 'open') fail('This work item has ended.');
 }
 
 function requireImText(value: unknown, what: string): string {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text) fail(`${what} is required.`);
-  const words = countImWords(text);
-  if (words > TEAM_IM_WORD_LIMIT) {
-    fail(
-      `${what} has ${words} words; group messages are limited to ${TEAM_IM_WORD_LIMIT}. Rewrite it shorter and call again.`,
-    );
-  }
+  const refusal = imTextLimitError(text);
+  if (refusal) fail(`${what}: ${refusal}`);
   return text;
 }
 
@@ -748,6 +930,8 @@ function optionalText(value: unknown, limit: number): string | null {
 /** A message the router received as a candidate, original or handed back. */
 interface Candidate {
   messageId: string;
+  /** The row's id in the router lane (the message id, or a hand-back's). */
+  rowId: string;
   content: string;
   senderName: string;
   sourceJid: string | null;
@@ -771,6 +955,7 @@ function loadCandidate(
     if (row && item?.tag === 'team_candidate') {
       return {
         messageId: triggerMessageId,
+        rowId: id,
         content: row.content,
         senderName: row.sender_name ?? '',
         sourceJid: row.source_jid,
@@ -820,81 +1005,223 @@ function refuseDecided(router: RouterLane, candidate: Candidate): void {
   }
 }
 
+// ── Replies in the group ───────────────────────────────────────────────
+
+/** How long a re-send is safe: Feishu dedupes a reply's uuid for an hour. */
+const REPLY_RESEND_WINDOW_MS = 55 * 60_000;
+const REPLY_RETRY_DELAYS_MS = [5_000, 30_000, 2 * 60_000, 10 * 60_000];
+
+const PURPOSE_LABEL: Record<string, string> = {
+  ack: '确认',
+  result: '结果',
+  attention: '问题',
+  answer: '回答',
+};
+
 /**
- * Post a team reply quoted under `quoteMessageId`, after the replies already
- * queued for the group. A delivered reply is stored as a bot message in
- * `laneJid` and subscribed for `subscribeFor`; a failure is recorded on it.
+ * Record a reply the group is owed and send it. The record is durable
+ * before this returns, so the caller may answer `queued` or record its ack:
+ * a restart sends it still (resumePendingTeamReplies). The id is the reply's
+ * identity; asking for the same reply again changes nothing.
  */
-function postTeamReply(input: {
+function requestReply(input: {
+  id: string;
+  workspaceJid: string;
+  workItem: WorkItem | null;
   channelJid: string;
   quoteMessageId: string;
   text: string;
-  deliveryKey: string;
-  laneJid: string;
-  subscribeFor?: WorkItem;
   purpose: string;
-}): void {
-  void queueTeamReply({
+  laneJid: string;
+}): WorkItemReply {
+  const reply = insertWorkItemReply({
+    id: input.id,
+    workspaceJid: input.workspaceJid,
+    workItemId: input.workItem?.id ?? null,
     channelJid: input.channelJid,
     quoteMessageId: input.quoteMessageId,
     text: input.text,
-    deliveryKey: input.deliveryKey,
-  }).then(async (outcome) => {
-    const item = input.subscribeFor;
-    if (!outcome.ok) {
-      logger.warn(
-        {
-          channelJid: input.channelJid,
-          workItemId: item?.id,
-          purpose: input.purpose,
-        },
-        'Team reply was not delivered',
-      );
-      if (item) {
-        recordWorkEvent({
-          workItemId: item.id,
-          kind: 'reply',
-          state: 'failed',
-          text: `${input.purpose}: ${outcome.error}`.slice(0, 500),
-          triggerMessageId: input.quoteMessageId,
-          now: now(),
-        });
-        broadcast(getWorkItem(item.id) ?? item);
-      }
-      return;
-    }
-    if (item && outcome.providerMessageId) {
-      subscribeWorkItem(
-        item.id,
-        item.channelJid,
-        subscriptionKey('msg', outcome.providerMessageId),
-        now(),
-      );
-    }
-    if (item && input.purpose !== 'ack') {
-      recordWorkEvent({
-        workItemId: item.id,
-        kind: 'reply',
-        state: input.purpose,
-        text: input.text,
-        triggerMessageId: input.quoteMessageId,
-        now: now(),
-      });
-    }
-    try {
-      await getWorkItemRuntimeHooks().postLaneMessage(
-        input.laneJid,
-        input.text,
-        outcome.providerMessageId ?? `team-reply-${input.deliveryKey}`,
-      );
-    } catch (error) {
-      logger.warn(
-        { err: error, laneJid: input.laneJid },
-        'Team reply was not stored in its lane',
-      );
-    }
-    if (item) broadcast(getWorkItem(item.id) ?? item);
+    purpose: input.purpose,
+    laneJid: input.laneJid,
+    now: now(),
   });
+  if (reply.status === 'pending') scheduleReply(reply.id, 0);
+  return reply;
+}
+
+const replyTimers = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; dueAt: number }
+>();
+const repliesInFlight = new Set<string>();
+
+function scheduleReply(id: string, delayMs: number): void {
+  if (replyTimers.has(id) || repliesInFlight.has(id)) return;
+  const timer = setTimeout(() => {
+    replyTimers.delete(id);
+    void sendReply(id);
+  }, delayMs);
+  timer.unref?.();
+  replyTimers.set(id, { timer, dueAt: Date.now() + delayMs });
+}
+
+/** Send every reply still owed, after a restart. Ids only are logged. */
+export function resumePendingTeamReplies(): void {
+  const pending = listPendingWorkItemReplies();
+  for (const reply of pending) {
+    const waiting = replyTimers.get(reply.id);
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      replyTimers.delete(reply.id);
+    }
+    scheduleReply(reply.id, 0);
+  }
+  if (pending.length > 0) {
+    logger.info(
+      { replyIds: pending.map((reply) => reply.id) },
+      'Resuming team replies owed to groups',
+    );
+  }
+}
+
+/**
+ * Test seam: send the replies that are due now and wait for them; a reply
+ * waiting out a retry delay stays pending.
+ */
+export async function settleTeamReplies(): Promise<void> {
+  for (let round = 0; round < 50; round++) {
+    for (const [id, waiting] of replyTimers) {
+      if (waiting.dueAt > Date.now()) continue;
+      clearTimeout(waiting.timer);
+      replyTimers.delete(id);
+      void sendReply(id);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    const due = [...replyTimers.values()].some(
+      (waiting) => waiting.dueAt <= Date.now(),
+    );
+    if (!due && repliesInFlight.size === 0) return;
+  }
+}
+
+async function sendReply(id: string): Promise<void> {
+  const reply = getWorkItemReply(id);
+  if (!reply || reply.status !== 'pending' || repliesInFlight.has(id)) return;
+  // An earlier attempt may have reached the group; past Feishu's dedupe
+  // window a re-send could post the reply twice, so it is settled instead.
+  if (
+    reply.attempt > 0 &&
+    Date.now() - Date.parse(reply.createdAt) > REPLY_RESEND_WINDOW_MS
+  ) {
+    settleReplyFailed(reply, '投递结果无法确认，已停止重发');
+    return;
+  }
+  repliesInFlight.add(id);
+  const attempt = reply.attempt + 1;
+  updateWorkItemReply(id, { attempt }, now());
+  try {
+    const outcome = await queueTeamReply({
+      channelJid: reply.channelJid,
+      quoteMessageId: reply.quoteMessageId,
+      text: reply.text,
+      deliveryKey: reply.id,
+      attempt,
+    });
+    if (outcome.ok) {
+      await settleReplyDelivered(reply, outcome.providerMessageId);
+    } else if (outcome.retryable && attempt <= REPLY_RETRY_DELAYS_MS.length) {
+      logger.warn(
+        { replyId: id, workItemId: reply.workItemId, attempt },
+        'Team reply not delivered yet; retrying',
+      );
+      repliesInFlight.delete(id);
+      scheduleReply(id, REPLY_RETRY_DELAYS_MS[attempt - 1]);
+    } else {
+      settleReplyFailed(reply, outcome.error);
+    }
+  } finally {
+    repliesInFlight.delete(id);
+  }
+}
+
+/**
+ * The reply is in the group: subscribe its message for the item (a reply to
+ * it reaches the item) and store it in the lane that said it.
+ */
+async function settleReplyDelivered(
+  reply: WorkItemReply,
+  providerMessageId: string | null,
+): Promise<void> {
+  updateWorkItemReply(
+    reply.id,
+    { status: 'delivered', providerMessageId, error: null },
+    now(),
+  );
+  const item = reply.workItemId ? getWorkItem(reply.workItemId) : undefined;
+  if (item && providerMessageId) {
+    subscribeWorkItem(
+      item.id,
+      item.channelJid,
+      subscriptionKey('msg', providerMessageId),
+      now(),
+    );
+  }
+  if (item && reply.purpose !== 'ack') {
+    recordWorkEvent({
+      workItemId: item.id,
+      kind: 'reply',
+      state: reply.purpose,
+      text: reply.text,
+      triggerMessageId: reply.quoteMessageId,
+      now: now(),
+    });
+  }
+  try {
+    await getWorkItemRuntimeHooks().postLaneMessage(
+      reply.laneJid,
+      reply.text,
+      providerMessageId ?? `team-reply-${reply.id}`,
+    );
+  } catch (error) {
+    logger.warn(
+      { err: error, replyId: reply.id },
+      'Team reply was not stored in its lane',
+    );
+  }
+  if (item) broadcast(getWorkItem(item.id) ?? item);
+}
+
+/**
+ * The reply cannot reach the group (its message recalled, the chat gone, or
+ * the outcome unknowable). The item gets a question for a person, so it
+ * shows among the items that need someone.
+ */
+function settleReplyFailed(reply: WorkItemReply, error: string): void {
+  updateWorkItemReply(
+    reply.id,
+    { status: 'failed', error: error.slice(0, 500) },
+    now(),
+  );
+  logger.warn(
+    { replyId: reply.id, workItemId: reply.workItemId, purpose: reply.purpose },
+    'Team reply was not delivered',
+  );
+  const item = reply.workItemId ? getWorkItem(reply.workItemId) : undefined;
+  if (!item) return;
+  recordWorkEvent({
+    workItemId: item.id,
+    kind: 'reply',
+    state: 'failed',
+    text: `${reply.purpose}: ${error}`.slice(0, 500),
+    triggerMessageId: reply.quoteMessageId,
+    now: now(),
+  });
+  const label = PURPOSE_LABEL[reply.purpose] ?? '回复';
+  const updated = patchItem(item, {
+    attention: `群里的${label}没有发出（${error.slice(0, 120)}），请在 Web 上查看并处理。`,
+    attentionMessageId: null,
+  });
+  broadcast(updated);
 }
 
 // One accept at a time per trigger: a retried tool call never creates two
@@ -1050,25 +1377,7 @@ async function acceptCandidate(
   noteDelivery(item, candidate.messageId, candidate.content);
   // The router's acknowledgement is this trigger's one ack: a worker's
   // work_ack on the same trigger is a duplicate.
-  if (
-    recordWorkEvent({
-      workItemId: item.id,
-      kind: 'ack',
-      text: acknowledgement,
-      triggerMessageId: candidate.messageId,
-      now: now(),
-    }) !== null
-  ) {
-    postTeamReply({
-      channelJid: context.channelJid,
-      quoteMessageId: candidate.messageId,
-      text: acknowledgement,
-      deliveryKey: `ack:${item.id}:${candidate.messageId}`,
-      laneJid: router.laneJid,
-      subscribeFor: item,
-      purpose: 'ack',
-    });
-  }
+  acknowledge(item, candidate.messageId, acknowledgement, router.laneJid);
   const rules = matchedRules
     .map((rule) => `${rule.name}: ${rule.instruction}`)
     .join('; ');
@@ -1155,6 +1464,15 @@ function attachCandidate(
   if (item.status === 'ended' && item.outcome === 'stopped') {
     fail('That work item was stopped by a person.');
   }
+  // Resuming needs the item's mandate to hold, as for any follow-up.
+  if (
+    item.status === 'ended' &&
+    !canResumeWorkItem(item, (sender) => isTeamListed(router.context, sender))
+  ) {
+    fail(
+      'That work item cannot be resumed: its requester is no longer listed.',
+    );
+  }
   refuseDecided(router, candidate);
   const note = optionalNote(route.note);
   const facts = candidate.item.facts ?? {};
@@ -1165,14 +1483,22 @@ function attachCandidate(
     reason: note ?? '',
   });
   noteDelivery(item, candidate.messageId);
+  // The item keeps its own mandate: a follow-up from someone who is not
+  // listed is marked so (listed="false") and authorizes nothing.
   deliverFollowupCopy(item, {
     id: candidate.messageId,
     content: candidate.content,
     senderName: candidate.senderName,
     sourceJid: candidate.sourceJid,
     senderImId: facts.senderImId,
+    senderIsBot: facts.senderIsBot,
     threadId: facts.threadId,
+    listed: facts.listed === true,
     addressed: facts.addressed === true,
+    channelContext: getMessageChannelTurnContext(
+      router.laneJid,
+      candidate.rowId,
+    ),
   });
   broadcast(item);
   return routed(candidate, 'attach', item.id);
@@ -1260,6 +1586,52 @@ async function handleWorkRoute(
   return { results };
 }
 
+/**
+ * The trigger's one acknowledgement: recorded as a reply first (durable),
+ * then as the item's ack event. Returns false when the trigger was already
+ * acknowledged (by the router's accept or an earlier work_ack).
+ */
+function acknowledge(
+  item: WorkItem,
+  triggerMessageId: string,
+  text: string,
+  laneJid: string,
+): boolean {
+  const id = `ack:${triggerMessageId}`;
+  if (getWorkItemReply(id)) return false;
+  requestReply({
+    id,
+    workspaceJid: item.workspaceJid,
+    workItem: item,
+    channelJid: item.channelJid,
+    quoteMessageId: triggerMessageId,
+    text,
+    purpose: 'ack',
+    laneJid,
+  });
+  recordWorkEvent({
+    workItemId: item.id,
+    kind: 'ack',
+    text,
+    triggerMessageId,
+    now: now(),
+  });
+  return true;
+}
+
+/** The last report a result answers (ready, blocked or failed), if any. */
+function lastResultReportId(item: WorkItem): number | null {
+  const last = listWorkEvents(item.id, 200)
+    .filter((event) => event.kind === 'report')
+    .at(-1);
+  return last &&
+    (last.state === 'ready' ||
+      last.state === 'blocked' ||
+      last.state === 'failed')
+    ? last.id
+    : null;
+}
+
 function handleWorkReply(
   caller: WorkIpcCaller,
   payload: Record<string, unknown>,
@@ -1267,33 +1639,42 @@ function handleWorkReply(
   const router = requireRouter(caller);
   const text = requireImText(payload.text, 'text');
   const purpose = payload.purpose;
-  const replyId = crypto.randomUUID();
   if (purpose === 'result' || purpose === 'attention') {
     const item = requireGroupItem(router, payload.workItemId);
     let quote: string;
+    let id: string;
     if (purpose === 'result') {
-      if (
-        item.lastReport !== 'ready' &&
-        item.lastReport !== 'blocked' &&
-        item.lastReport !== 'failed'
-      ) {
+      const reportId =
+        item.lastReport === 'ready' ||
+        item.lastReport === 'blocked' ||
+        item.lastReport === 'failed'
+          ? lastResultReportId(item)
+          : null;
+      if (reportId === null) {
         fail(
           'A result needs the item to have reported ready, blocked or failed.',
         );
+      }
+      // One result per report.
+      id = `result:${item.id}:${reportId}`;
+      if (getWorkItemReply(id)) {
+        fail('The result of this report was already posted.');
       }
       quote = item.sourceMessageId;
     } else {
       if (!item.attention) fail('This work item is not waiting for anyone.');
       quote = item.attentionMessageId ?? item.sourceMessageId;
+      id = `attention:${item.id}:${crypto.randomUUID()}`;
     }
-    postTeamReply({
+    requestReply({
+      id,
+      workspaceJid: item.workspaceJid,
+      workItem: item,
       channelJid: item.channelJid,
       quoteMessageId: quote,
       text,
-      deliveryKey: `${purpose}:${item.id}:${replyId}`,
-      laneJid: router.laneJid,
-      subscribeFor: item,
       purpose,
+      laneJid: router.laneJid,
     });
     return { queued: true };
   }
@@ -1310,13 +1691,18 @@ function handleWorkReply(
     ) {
       fail('That message belongs to a work item; answer through it.');
     }
-    postTeamReply({
+    // One answer per candidate.
+    const id = `answer:${router.context.channelJid}:${candidate.messageId}`;
+    if (getWorkItemReply(id)) fail('This candidate was already answered.');
+    requestReply({
+      id,
+      workspaceJid: router.context.workspaceJid,
+      workItem: null,
       channelJid: router.context.channelJid,
       quoteMessageId: candidate.messageId,
       text,
-      deliveryKey: `answer:${candidate.messageId}:${replyId}`,
-      laneJid: router.laneJid,
       purpose,
+      laneJid: router.laneJid,
     });
     return { queued: true };
   }
@@ -1336,12 +1722,11 @@ function handleWorkList(
     typeof payload.limit === 'number' && Number.isFinite(payload.limit)
       ? Math.min(Math.max(Math.trunc(payload.limit), 1), 100)
       : 30;
-  const items = listWorkItems(router.context.workspaceJid, {
+  const items = listWorkItemsByChannel(router.context.channelJid, {
     status,
-    limit: 500,
+    limit,
   })
-    .filter((item) => item.channelJid === router.context.channelJid)
-    .slice(0, limit)
+    .filter((item) => item.workspaceJid === router.context.workspaceJid)
     .map((item) => ({
       id: item.id,
       seq: item.seq,
@@ -1405,31 +1790,30 @@ function handleWorkReport(
   const runtime = getWorkItemRuntimeHooks();
   const workerLane = laneJidOf(item.workspaceJid, item.agentId);
   void runtime
-    .postLaneMessage(workerLane, summary, `work-report-${item.id}-${eventId}`)
+    .postLaneMessage(workerLane, summary, reportInputId(item.id, eventId))
     .catch((error) =>
       logger.warn({ err: error, workItemId: item.id }, 'Report not stored'),
     );
   // Progress only updates the item; a dropped item ends silently.
-  const forward =
-    (state !== 'progress' || !!humanAction) && state !== 'dropped';
-  const context = forward ? resolveTeamGroup(item.channelJid) : null;
-  if (context?.routerAgentId) {
-    injectTeamInput({
-      workspaceJid: context.workspaceJid,
-      agentId: context.routerAgentId,
-      messageId: `work-report-${item.id}-${eventId}`,
-      content: summary,
-      item: {
-        tag: 'work_report',
-        attrs: [
-          ['item', `#${item.seq}`],
-          ['id', item.id],
-          ['state', state],
-          ['attention', humanAction ?? ''],
-        ],
-        facts: { workItemId: item.id },
-      },
-    });
+  if (forwardsReport(state, updated.attention)) {
+    const context = resolveTeamGroup(item.channelJid);
+    if (context?.routerAgentId) {
+      injectReport(updated, context.routerAgentId, {
+        eventId,
+        state,
+        summary,
+      });
+    } else {
+      // Nobody can act on it now: kept on the item, and handed to the
+      // router the group gets when its settings are saved again.
+      recordWorkEvent({
+        workItemId: item.id,
+        kind: 'report',
+        state: 'undelivered',
+        text: '路由会话不存在，这份报告还没有送达；重新保存团队设置后会补发给新的路由会话。',
+        now: now(),
+      });
+    }
   }
   broadcast(updated);
   return {};
@@ -1441,10 +1825,9 @@ function stringField(value: unknown): string {
 
 /** The trigger was delivered to this item (its source or a follow-up). */
 function wasDeliveredTo(item: WorkItem, triggerMessageId: string): boolean {
-  if (item.sourceMessageId === triggerMessageId) return true;
-  return listWorkEvents(item.id, 1000).some(
-    (event) =>
-      event.kind === 'input' && event.triggerMessageId === triggerMessageId,
+  return (
+    item.sourceMessageId === triggerMessageId ||
+    hasWorkEvent(item.id, 'input', triggerMessageId)
   );
 }
 
@@ -1453,29 +1836,19 @@ function handleWorkAck(
   payload: Record<string, unknown>,
 ): unknown {
   const item = requireWorker(caller);
+  requireOpen(item);
   const trigger = stringField(payload.triggerMessageId);
   if (!trigger || !wasDeliveredTo(item, trigger)) {
     fail('triggerMessageId is not a message delivered to this work item.');
   }
   const text = requireImText(payload.text, 'text');
-  const eventId = recordWorkEvent({
-    workItemId: item.id,
-    kind: 'ack',
+  const posted = acknowledge(
+    item,
+    trigger,
     text,
-    triggerMessageId: trigger,
-    now: now(),
-  });
-  if (eventId === null) return { duplicate: true };
-  postTeamReply({
-    channelJid: item.channelJid,
-    quoteMessageId: trigger,
-    text,
-    deliveryKey: `ack:${item.id}:${trigger}`,
-    laneJid: laneJidOf(item.workspaceJid, item.agentId),
-    subscribeFor: item,
-    purpose: 'ack',
-  });
-  return { duplicate: false };
+    laneJidOf(item.workspaceJid, item.agentId),
+  );
+  return { duplicate: !posted };
 }
 
 function handleWorkHandback(
@@ -1483,6 +1856,7 @@ function handleWorkHandback(
   payload: Record<string, unknown>,
 ): unknown {
   const item = requireWorker(caller);
+  requireOpen(item);
   const trigger = stringField(payload.triggerMessageId);
   if (
     !trigger ||
@@ -1506,18 +1880,21 @@ function handleWorkHandback(
   const original = row ? readTeamInput(row.attachments) : null;
   if (!row || !original) fail('The follow-up is no longer stored.');
   const facts = original.facts ?? {};
-  const listed = isTeamListed(context, facts.senderImId);
+  const fromBot = facts.senderIsBot === true;
+  const listed = !fromBot && isTeamListed(context, facts.senderImId);
   const addressed = facts.addressed === true;
   const strength = admitMessage(context.settings, {
     listed,
     addressed,
-    fromBot: false,
+    fromBot,
   });
   if (strength === 'ignore') {
     fail(
       'The group would not admit this message as a request; keep or drop it.',
     );
   }
+  // The message and the replies to it no longer reach this item (the gate
+  // also skips it for their root and thread, by the handback event).
   unsubscribeWorkItem(
     item.id,
     item.channelJid,
@@ -1537,6 +1914,7 @@ function handleWorkHandback(
     content: row.content,
     senderName: row.sender_name ?? undefined,
     sourceJid: row.source_jid ?? item.channelJid,
+    channelContext: getMessageChannelTurnContext(workerLane, row.id),
     item: candidateInputItem({
       triggerMessageId: trigger,
       strength,
@@ -1545,6 +1923,7 @@ function handleWorkHandback(
       settings: context.settings,
       threadItems: [item],
       senderImId: facts.senderImId,
+      senderIsBot: fromBot,
       threadId: facts.threadId,
       handback: { item, reason },
     }),
@@ -1622,10 +2001,34 @@ export function onTeamSessionDeleted(agentId: string): void {
 
 /** Open work items of a group, for `/status`. */
 export function countOpenWorkItems(channelJid: string): number {
-  const team = getTeamMount(channelJid);
-  if (!team) return 0;
-  return listWorkItems(team.workspaceJid, {
-    status: 'open',
-    limit: 500,
-  }).filter((item) => item.channelJid === channelJid).length;
+  return countWorkItemsByChannel(channelJid, 'open');
 }
+
+/**
+ * Refuse a team session's IPC that would reach a chat or the Feishu API
+ * beyond reading. Team sessions speak only through the team tools; of the
+ * Feishu capabilities they keep exactly the reads (an allowlist, so a new
+ * capability stays refused until it is added here). Null when allowed.
+ */
+export function teamIpcRefusal(
+  type: string,
+  operation: string | undefined,
+): string | null {
+  if (type === 'send_file') return TEAM_SESSION_TOOL_REFUSAL;
+  if (type === 'feishu_capability') {
+    return operation && TEAM_FEISHU_READ_OPERATIONS.has(operation)
+      ? null
+      : TEAM_SESSION_TOOL_REFUSAL;
+  }
+  return null;
+}
+
+const TEAM_FEISHU_READ_OPERATIONS: ReadonlySet<string> = new Set([
+  'get_chat',
+  'list_members',
+  'get_user',
+  'get_history',
+]);
+
+const TEAM_SESSION_TOOL_REFUSAL =
+  'Team-mode sessions only read from Feishu. A router replies with work_reply; a worker acknowledges with work_ack and reports with work_report.';

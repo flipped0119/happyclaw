@@ -72,6 +72,7 @@ describe('team replies', () => {
         quoteMessageId: 'om_request',
         text: '收到，我来看看',
         deliveryKey: 'ack:w1:om_request',
+        attempt: 1,
       },
       route,
       (context, capability) =>
@@ -99,6 +100,7 @@ describe('team replies', () => {
           quoteMessageId: 'om_request',
           text: '好了',
           deliveryKey: 'result:w1:r1',
+          attempt: 1,
         },
         route,
         (context, capability) =>
@@ -117,12 +119,43 @@ describe('team replies', () => {
         quoteMessageId: 'om_other_chat',
         text: '答',
         deliveryKey: 'answer:om_other_chat:r1',
+        attempt: 1,
       },
       route,
       (context, capability) =>
         executeFeishuCapability(client, context, capability),
     );
-    expect(outcome.ok).toBe(false);
+    expect(outcome).toMatchObject({ ok: false, retryable: false });
     expect(client.im.v1.message.reply).not.toHaveBeenCalled();
+  });
+
+  test('an attempt left uncertain does not block the next, which carries the same uuid', async () => {
+    const client = fakeClient();
+    const timeout = Object.assign(new Error('socket hang up'), {
+      code: 'ECONNRESET',
+    });
+    client.im.v1.message.reply
+      .mockRejectedValueOnce(timeout)
+      .mockRejectedValueOnce(timeout);
+    const send = (attempt: number) =>
+      deliverTeamReplyThroughOutbox(
+        {
+          channelJid: 'feishu:oc_team',
+          quoteMessageId: 'om_request',
+          text: '在看了',
+          deliveryKey: 'ack:om_uncertain',
+          attempt,
+        },
+        route,
+        (context, capability) =>
+          executeFeishuCapability(client, context, capability),
+      );
+    expect(await send(1)).toMatchObject({ ok: false, retryable: true });
+    expect(await send(2)).toMatchObject({ ok: true });
+    const uuids = client.im.v1.message.reply.mock.calls.map(
+      ([request]) => (request as { data: { uuid: string } }).data.uuid,
+    );
+    expect(uuids.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(uuids).size).toBe(1);
   });
 });

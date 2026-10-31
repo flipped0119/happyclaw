@@ -1,6 +1,7 @@
 /**
  * Durable state of team mode (团队模式): work items, the threads they
- * subscribe to, their event log and the router's decisions.
+ * subscribe to, their event log, the replies the host owes a group and the
+ * router's decisions.
  *
  * db.ts binds this module to its connection. The work item service is the
  * only writer; REST and views read through it as well.
@@ -124,6 +125,8 @@ export function initWorkItemStore(db: SqliteDatabase | null): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_work_item_events_ack
       ON work_item_events(trigger_message_id)
       WHERE kind = 'ack' AND trigger_message_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_work_item_events_trigger
+      ON work_item_events(work_item_id, kind, trigger_message_id);
 
     CREATE TABLE IF NOT EXISTS work_decisions (
       id TEXT PRIMARY KEY,
@@ -141,6 +144,29 @@ export function initWorkItemStore(db: SqliteDatabase | null): void {
       ON work_decisions(workspace_jid, created_at);
     CREATE INDEX IF NOT EXISTS idx_work_decisions_trigger
       ON work_decisions(channel_jid, trigger_message_id);
+
+    CREATE TABLE IF NOT EXISTS work_item_replies (
+      id TEXT PRIMARY KEY,
+      workspace_jid TEXT NOT NULL,
+      work_item_id TEXT,
+      channel_jid TEXT NOT NULL,
+      quote_message_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      lane_jid TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt INTEGER NOT NULL DEFAULT 0,
+      provider_message_id TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_item_replies_status
+      ON work_item_replies(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_work_item_replies_posted
+      ON work_item_replies(channel_jid, provider_message_id);
+    CREATE INDEX IF NOT EXISTS idx_work_items_channel
+      ON work_items(channel_jid, status, updated_at);
   `);
 }
 
@@ -383,6 +409,34 @@ export function listWorkItems(
   return rows.map(mapItem);
 }
 
+/** A group's items, newest first. */
+export function listWorkItemsByChannel(
+  channelJid: string,
+  options: { status?: WorkItemStatus; limit?: number } = {},
+): WorkItem[] {
+  const limit = Math.min(Math.max(options.limit ?? 200, 1), 500);
+  const rows = (
+    options.status
+      ? stmt(
+          'SELECT * FROM work_items WHERE channel_jid = ? AND status = ? ORDER BY updated_at DESC LIMIT ?',
+        ).all(channelJid, options.status, limit)
+      : stmt(
+          'SELECT * FROM work_items WHERE channel_jid = ? ORDER BY updated_at DESC LIMIT ?',
+        ).all(channelJid, limit)
+  ) as WorkItemRow[];
+  return rows.map(mapItem);
+}
+
+export function countWorkItemsByChannel(
+  channelJid: string,
+  status: WorkItemStatus,
+): number {
+  const row = stmt(
+    'SELECT COUNT(*) AS n FROM work_items WHERE channel_jid = ? AND status = ?',
+  ).get(channelJid, status) as { n: number };
+  return row.n;
+}
+
 export interface WorkItemPatch {
   title?: string;
   status?: WorkItemStatus;
@@ -472,6 +526,8 @@ export function listWorkItemSubscriptions(
 export function findSubscribedWorkItems(
   channelJid: string,
   keys: readonly string[],
+  /** The workspace the group is mounted on now; items of another are skipped. */
+  workspaceJid: string,
 ): WorkItem[] {
   if (keys.length === 0) return [];
   const placeholders = keys.map(() => '?').join(', ');
@@ -480,10 +536,11 @@ export function findSubscribedWorkItems(
       `SELECT DISTINCT w.* FROM work_item_subscriptions s
          JOIN work_items w ON w.id = s.work_item_id
         WHERE s.channel_jid = ? AND s.sub_key IN (${placeholders})
+          AND w.workspace_jid = ?
           AND (w.status = 'open' OR w.outcome IS NOT 'stopped')
         ORDER BY w.created_at`,
     )
-    .all(channelJid, ...keys) as WorkItemRow[];
+    .all(channelJid, ...keys, workspaceJid) as WorkItemRow[];
   return rows.map(mapItem);
 }
 
@@ -524,6 +581,17 @@ export function recordWorkEvent(input: {
   }
 }
 
+/** Whether the item has an event of `kind` for this trigger. */
+export function hasWorkEvent(
+  workItemId: string,
+  kind: WorkEventKind,
+  triggerMessageId: string,
+): boolean {
+  return !!stmt(
+    'SELECT 1 FROM work_item_events WHERE work_item_id = ? AND kind = ? AND trigger_message_id = ? LIMIT 1',
+  ).get(workItemId, kind, triggerMessageId);
+}
+
 export function listWorkEvents(workItemId: string, limit = 200): WorkEvent[] {
   return (
     stmt(
@@ -548,6 +616,154 @@ export function listWorkEvents(workItemId: string, limit = 200): WorkEvent[] {
       triggerMessageId: row.trigger_message_id,
       createdAt: row.created_at,
     }));
+}
+
+// ── Replies in the group ───────────────────────────────────────────────
+
+export type WorkItemReplyStatus = 'pending' | 'delivered' | 'failed';
+
+/**
+ * A reply the host owes a group (an acknowledgement, a result, a question or
+ * an answer), recorded before the tool that asked for it returns, so a
+ * restart sends it still. The id is the reply's delivery key.
+ */
+export interface WorkItemReply {
+  id: string;
+  workspaceJid: string;
+  workItemId: string | null;
+  channelJid: string;
+  quoteMessageId: string;
+  text: string;
+  purpose: string;
+  /** The lane that said it: the delivered reply is stored there. */
+  laneJid: string;
+  status: WorkItemReplyStatus;
+  attempt: number;
+  providerMessageId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface WorkItemReplyRow {
+  id: string;
+  workspace_jid: string;
+  work_item_id: string | null;
+  channel_jid: string;
+  quote_message_id: string;
+  text: string;
+  purpose: string;
+  lane_jid: string;
+  status: string;
+  attempt: number;
+  provider_message_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapReply(row: WorkItemReplyRow): WorkItemReply {
+  return {
+    id: row.id,
+    workspaceJid: row.workspace_jid,
+    workItemId: row.work_item_id,
+    channelJid: row.channel_jid,
+    quoteMessageId: row.quote_message_id,
+    text: row.text,
+    purpose: row.purpose,
+    laneJid: row.lane_jid,
+    status: row.status as WorkItemReplyStatus,
+    attempt: row.attempt,
+    providerMessageId: row.provider_message_id,
+    error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Record a reply; the same id again returns the first record. */
+export function insertWorkItemReply(input: {
+  id: string;
+  workspaceJid: string;
+  workItemId: string | null;
+  channelJid: string;
+  quoteMessageId: string;
+  text: string;
+  purpose: string;
+  laneJid: string;
+  now: string;
+}): WorkItemReply {
+  stmt(
+    `INSERT OR IGNORE INTO work_item_replies (id, workspace_jid, work_item_id, channel_jid, quote_message_id,
+       text, purpose, lane_jid, status, attempt, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+  ).run(
+    input.id,
+    input.workspaceJid,
+    input.workItemId,
+    input.channelJid,
+    input.quoteMessageId,
+    input.text,
+    input.purpose,
+    input.laneJid,
+    input.now,
+    input.now,
+  );
+  return getWorkItemReply(input.id)!;
+}
+
+export function getWorkItemReply(id: string): WorkItemReply | undefined {
+  const row = stmt('SELECT * FROM work_item_replies WHERE id = ?').get(id) as
+    | WorkItemReplyRow
+    | undefined;
+  return row ? mapReply(row) : undefined;
+}
+
+/** A message the host posted in the group as a team reply. */
+export function isWorkItemReplyMessage(
+  channelJid: string,
+  providerMessageId: string,
+): boolean {
+  return !!stmt(
+    'SELECT 1 FROM work_item_replies WHERE channel_jid = ? AND provider_message_id = ? LIMIT 1',
+  ).get(channelJid, providerMessageId);
+}
+
+/** Replies not delivered yet, oldest first. */
+export function listPendingWorkItemReplies(): WorkItemReply[] {
+  return (
+    stmt(
+      "SELECT * FROM work_item_replies WHERE status = 'pending' ORDER BY created_at",
+    ).all() as WorkItemReplyRow[]
+  ).map(mapReply);
+}
+
+export function updateWorkItemReply(
+  id: string,
+  patch: {
+    status?: WorkItemReplyStatus;
+    attempt?: number;
+    providerMessageId?: string | null;
+    error?: string | null;
+  },
+  now: string,
+): WorkItemReply | undefined {
+  const current = getWorkItemReply(id);
+  if (!current) return undefined;
+  stmt(
+    `UPDATE work_item_replies SET status = ?, attempt = ?, provider_message_id = ?, error = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    patch.status ?? current.status,
+    patch.attempt ?? current.attempt,
+    patch.providerMessageId !== undefined
+      ? patch.providerMessageId
+      : current.providerMessageId,
+    patch.error !== undefined ? patch.error : current.error,
+    now,
+    id,
+  );
+  return getWorkItemReply(id);
 }
 
 // ── Decisions ──────────────────────────────────────────────────────────
@@ -637,6 +853,9 @@ export function deleteWorkspaceWorkItems(workspaceJid: string): void {
     stmt(
       `DELETE FROM work_item_subscriptions WHERE work_item_id IN (SELECT id FROM work_items WHERE workspace_jid = ?)`,
     ).run(workspaceJid);
+    stmt('DELETE FROM work_item_replies WHERE workspace_jid = ?').run(
+      workspaceJid,
+    );
     stmt('DELETE FROM work_items WHERE workspace_jid = ?').run(workspaceJid);
     stmt('DELETE FROM work_decisions WHERE workspace_jid = ?').run(
       workspaceJid,

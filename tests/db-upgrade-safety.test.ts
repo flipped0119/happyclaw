@@ -218,8 +218,8 @@ describe('schema version head', () => {
     // v86: users.guest_owner_id and guest_workspace_grants, read-only guest
     // accounts (schema-v86-guest-accounts.test.ts).
     // v87: team mode (team_mounts, work_items, work_item_subscriptions,
-    // work_item_events, work_decisions), created by work-item-store.ts
-    // (schema-v87-work-items.test.ts).
+    // work_item_events, work_decisions, work_item_replies), created by
+    // work-item-store.ts (schema-v87-work-items.test.ts).
     expect(db.CURRENT_SCHEMA_VERSION).toBe(87);
   });
 });
