@@ -163,6 +163,8 @@ export function initWorkItemStore(db: SqliteDatabase | null): void {
     );
     CREATE INDEX IF NOT EXISTS idx_work_item_replies_status
       ON work_item_replies(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_work_item_replies_posted
+      ON work_item_replies(channel_jid, provider_message_id);
     CREATE INDEX IF NOT EXISTS idx_work_items_channel
       ON work_items(channel_jid, status, updated_at);
   `);
@@ -715,6 +717,16 @@ export function getWorkItemReply(id: string): WorkItemReply | undefined {
     | WorkItemReplyRow
     | undefined;
   return row ? mapReply(row) : undefined;
+}
+
+/** A message the host posted in the group as a team reply. */
+export function isWorkItemReplyMessage(
+  channelJid: string,
+  providerMessageId: string,
+): boolean {
+  return !!stmt(
+    'SELECT 1 FROM work_item_replies WHERE channel_jid = ? AND provider_message_id = ? LIMIT 1',
+  ).get(channelJid, providerMessageId);
 }
 
 /** Replies not delivered yet, oldest first. */
