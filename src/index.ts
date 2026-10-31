@@ -616,7 +616,7 @@ import {
 import { ProactiveCommentaryRelay } from './process-commentary.js';
 import {
   decideTeamInbound,
-  formatWithTeamInputs,
+  teamInputFrameOf,
   readTeamInput,
   recallTeamDecision,
   rememberTeamDecision,
@@ -706,10 +706,11 @@ export function formatMessages(
   ...[messages, options]: Parameters<typeof formatPromptMessages>
 ): string {
   // Team inputs carry their header (candidate, assignment, follow-up, report)
-  // as a hidden item rendered in place of the escaped body.
-  return formatWithTeamInputs(withAutomationRunContext(messages), (batch) =>
-    formatPromptMessages(batch, options),
-  );
+  // as a hidden item the formatter frames the escaped body with.
+  return formatPromptMessages(withAutomationRunContext(messages), {
+    ...options,
+    frameOf: teamInputFrameOf,
+  });
 }
 
 /**
