@@ -20714,7 +20714,8 @@ function resolveTeamPlan(
     mentionedBot: meta.mentionedBot === true,
   };
   let decision: TeamInboundDecision = decideTeamInbound(context, message, {
-    findSubscribedItems: findSubscribedWorkItems,
+    findSubscribedItems: (channel, keys) =>
+      findSubscribedWorkItems(channel, keys, context.workspaceJid),
     isListed: (sender) => isTeamListed(context, sender),
     isOwnBotMessage: (id) => isTeamBotMessage(context, id),
     hasWorker: hasWorkerSession,

@@ -499,7 +499,11 @@ describe('work_reply', () => {
     ]);
     // The result message is subscribed: a reply to it reaches the item.
     expect(
-      store.findSubscribedWorkItems(CHAT, [`msg:om_bot_${replySeq}`]),
+      store.findSubscribedWorkItems(
+        CHAT,
+        [`msg:om_bot_${replySeq}`],
+        WORKSPACE,
+      ),
     ).toEqual([expect.objectContaining({ id: item.id })]);
   });
 
@@ -713,7 +717,8 @@ describe('subscribed group messages', () => {
         mentionedBot: false,
       },
       {
-        findSubscribedItems: store.findSubscribedWorkItems,
+        findSubscribedItems: (channel, keys) =>
+          store.findSubscribedWorkItems(channel, keys, WORKSPACE),
         isListed: (sender) => service.isTeamListed(context, sender),
         isOwnBotMessage: (id) => service.isTeamBotMessage(context, id),
         hasWorker: service.hasWorkerSession,

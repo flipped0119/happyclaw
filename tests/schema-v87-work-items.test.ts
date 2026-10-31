@@ -37,6 +37,7 @@ const TABLES = [
   'work_item_subscriptions',
   'work_item_events',
   'work_decisions',
+  'work_item_replies',
 ];
 
 function tableNames(conn: Database.Database): string[] {
@@ -143,11 +144,13 @@ describe('schema v87 team mode', () => {
     store.subscribeWorkItem('w1', 'feishu:oc_g', key, NOW);
     expect(
       store
-        .findSubscribedWorkItems('feishu:oc_g', [key, 'msg:none'])
+        .findSubscribedWorkItems('feishu:oc_g', [key, 'msg:none'], 'web:ws')
         .map((item) => item.id),
     ).toEqual(['w1', 'w2']);
     // Another chat with the same message id is a different thread.
-    expect(store.findSubscribedWorkItems('feishu:oc_other', [key])).toEqual([]);
+    expect(
+      store.findSubscribedWorkItems('feishu:oc_other', [key], 'web:ws'),
+    ).toEqual([]);
 
     store.updateWorkItem(
       'w2',
@@ -155,14 +158,85 @@ describe('schema v87 team mode', () => {
       NOW,
     );
     expect(
-      store.findSubscribedWorkItems('feishu:oc_g', [key]).map((i) => i.id),
+      store
+        .findSubscribedWorkItems('feishu:oc_g', [key], 'web:ws')
+        .map((i) => i.id),
     ).toEqual(['w1', 'w2']);
     store.updateWorkItem('w2', { outcome: 'stopped' }, NOW);
     expect(
-      store.findSubscribedWorkItems('feishu:oc_g', [key]).map((i) => i.id),
+      store
+        .findSubscribedWorkItems('feishu:oc_g', [key], 'web:ws')
+        .map((i) => i.id),
     ).toEqual(['w1']);
     store.unsubscribeWorkItem('w1', 'feishu:oc_g', key);
-    expect(store.findSubscribedWorkItems('feishu:oc_g', [key])).toEqual([]);
+    expect(
+      store.findSubscribedWorkItems('feishu:oc_g', [key], 'web:ws'),
+    ).toEqual([]);
+  });
+
+  test('an item of another workspace is never reached', () => {
+    const key = subscriptionKey('msg', 'om_x');
+    store.subscribeWorkItem('w1', 'feishu:oc_g', key, NOW);
+    expect(
+      store.findSubscribedWorkItems('feishu:oc_g', [key], 'web:other'),
+    ).toEqual([]);
+    store.unsubscribeWorkItem('w1', 'feishu:oc_g', key);
+  });
+
+  test('a group lists and counts its own items', () => {
+    expect(
+      store.listWorkItemsByChannel('feishu:oc_g').map((item) => item.id),
+    ).toEqual(expect.arrayContaining(['w1', 'w2']));
+    expect(store.listWorkItemsByChannel('feishu:oc_other')).toEqual([]);
+    expect(store.countWorkItemsByChannel('feishu:oc_g', 'open')).toBe(
+      store.listWorkItemsByChannel('feishu:oc_g', { status: 'open' }).length,
+    );
+  });
+
+  test('events are found by kind and trigger', () => {
+    store.recordWorkEvent({
+      workItemId: 'w-events',
+      kind: 'input',
+      triggerMessageId: 'om_in',
+      now: NOW,
+    });
+    expect(store.hasWorkEvent('w-events', 'input', 'om_in')).toBe(true);
+    expect(store.hasWorkEvent('w-events', 'ack', 'om_in')).toBe(false);
+    expect(store.hasWorkEvent('w-other', 'input', 'om_in')).toBe(false);
+  });
+
+  test('a reply is recorded once and stays pending until settled', () => {
+    const reply = {
+      id: 'ack:w1:om_1',
+      workspaceJid: 'web:ws',
+      workItemId: 'w1',
+      channelJid: 'feishu:oc_g',
+      quoteMessageId: 'om_1',
+      text: '收到',
+      purpose: 'ack',
+      laneJid: 'web:ws#agent:a1',
+      now: NOW,
+    };
+    expect(store.insertWorkItemReply(reply)).toMatchObject({
+      status: 'pending',
+      attempt: 0,
+    });
+    expect(store.insertWorkItemReply({ ...reply, text: 'other' }).text).toBe(
+      '收到',
+    );
+    expect(store.listPendingWorkItemReplies().map((r) => r.id)).toEqual([
+      'ack:w1:om_1',
+    ]);
+    store.updateWorkItemReply(
+      reply.id,
+      { status: 'delivered', attempt: 1, providerMessageId: 'om_bot' },
+      NOW,
+    );
+    expect(store.getWorkItemReply(reply.id)).toMatchObject({
+      status: 'delivered',
+      providerMessageId: 'om_bot',
+    });
+    expect(store.listPendingWorkItemReplies()).toEqual([]);
   });
 
   test('an acknowledgement is recorded once per trigger', () => {
@@ -231,5 +305,6 @@ describe('schema v87 team mode', () => {
     expect(store.listWorkDecisions('web:ws')).toEqual([]);
     expect(store.getTeamMount('feishu:oc_g')).toBeUndefined();
     expect(store.listWorkEvents('w1')).toEqual([]);
+    expect(store.getWorkItemReply('ack:w1:om_1')).toBeUndefined();
   });
 });
