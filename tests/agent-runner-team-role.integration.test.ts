@@ -193,6 +193,7 @@ const POSTING_TOOLS = [
   'send_image',
   'send_file',
   'feishu_send_card',
+  'feishu_api_request',
 ].map((name) => `mcp__happyclaw__${name}`);
 
 const runs: Record<string, MainRequest> = {};

@@ -2331,6 +2331,7 @@ const TEAM_WITHHELD_TOOL_NAMES = new Set([
   'send_image',
   'send_file',
   'feishu_send_card',
+  'feishu_api_request',
 ]);
 
 /**
