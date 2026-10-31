@@ -365,20 +365,26 @@ function menuRowText(
   row: ModelRow,
   sole: boolean,
 ): { title: string; detail: string } {
-  if (!sole) return { title: row.id || '由中转站决定', detail: rowDetail(row) };
-  return {
-    title: row.option.name,
-    detail: [
-      row.id || '由中转站决定',
-      row.contextWindow
-        ? `${formatTokenCount(row.contextWindow)} 上下文`
-        : null,
-      row.note,
-      optionStatus(row.option),
-    ]
-      .filter(Boolean)
-      .join(' · '),
-  };
+  const detail = (first: string) =>
+    [first, row.note, optionStatus(row.option)].filter(Boolean).join(' · ');
+  return sole
+    ? { title: row.option.name, detail: detail(row.id || '由中转站决定') }
+    : { title: row.id || '由中转站决定', detail: detail(row.option.name) };
+}
+
+/**
+ * A phone's menus after iOS's: a large corner and a soft shadow,
+ * rows edge to edge with hairlines between them, sections set apart by a
+ * gap rather than a line.
+ */
+const PHONE_MENU_CLASS =
+  'overflow-hidden rounded-2xl bg-popover p-0 shadow-floating ring-foreground/10';
+const PHONE_MENU_ROW_CLASS =
+  'rounded-none px-3 pr-10 [&>[data-slot$=indicator]]:right-3.5';
+
+/** The gap between the sections of a phone's menu. */
+function MenuGap() {
+  return <div role="none" className="h-2 bg-foreground/[0.06]" />;
 }
 
 /**
@@ -1206,19 +1212,32 @@ function EffortMenu({
         align="start"
         collisionPadding={8}
         onCloseAutoFocus={keepFocusThatMovedOn}
-        className="w-64 max-w-[calc(100vw-2rem)]"
+        className={cn(
+          'w-64 max-w-[calc(100vw-2rem)]',
+          touch && cn(PHONE_MENU_CLASS, 'w-60'),
+        )}
       >
-        <DropdownMenuLabel className="flex items-center gap-1.5">
+        <DropdownMenuLabel
+          className={cn(
+            'flex items-center gap-1.5',
+            touch && 'px-3 pt-2.5 pb-1.5 text-caption text-muted-foreground',
+          )}
+        >
           推理等级
-          <EffortsSourceBadge source={context.effortsSource} />
+          {/* 推断 / 自定义 needs its tooltip, which a touch screen lacks. */}
+          {!touch && <EffortsSourceBadge source={context.effortsSource} />}
         </DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={context.effort ?? DEFAULT_EFFORT}
           onValueChange={(value) =>
             onPick(value === DEFAULT_EFFORT ? null : value)
           }
+          className={cn(touch && 'divide-y divide-surface-border')}
         >
-          <DropdownMenuRadioItem value={DEFAULT_EFFORT}>
+          <DropdownMenuRadioItem
+            value={DEFAULT_EFFORT}
+            className={cn(touch && PHONE_MENU_ROW_CLASS)}
+          >
             默认
             {context.defaultEffort && (
               <span className="text-muted-foreground">
@@ -1227,9 +1246,13 @@ function EffortMenu({
               </span>
             )}
           </DropdownMenuRadioItem>
-          <DropdownMenuSeparator />
+          {touch ? <MenuGap /> : <DropdownMenuSeparator />}
           {context.efforts.map((effort) => (
-            <DropdownMenuRadioItem key={effort} value={effort}>
+            <DropdownMenuRadioItem
+              key={effort}
+              value={effort}
+              className={cn(touch && PHONE_MENU_ROW_CLASS)}
+            >
               <span className="flex min-w-0 flex-col">
                 {effortLabel(effort)}
                 {EFFORT_HINTS[effort] && (
@@ -1244,10 +1267,15 @@ function EffortMenu({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        <DropdownMenuSeparator />
-        <p className="px-2 py-1 text-micro leading-4 text-muted-foreground">
-          只影响推理深度，从下一条消息开始生效，不会重置会话。
-        </p>
+        {/* A phone's toast says when a level applies. */}
+        {!touch && (
+          <>
+            <DropdownMenuSeparator />
+            <p className="px-2 py-1 text-micro leading-4 text-muted-foreground">
+              只影响推理深度，从下一条消息开始生效，不会重置会话。
+            </p>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1285,13 +1313,24 @@ function ModelMenu({
   footer,
 }: ModelMenuProps) {
   const unusable = defaultUnusable(selection);
+  // A followed one-model connection goes by its name, as its row does.
+  const followed = selection.options.find(
+    (option) => option.id === selection.default.modelConfigId,
+  );
+  const defaultDetail =
+    !unusable &&
+    followed &&
+    sole.has(followed.id) &&
+    selection.default.source !== 'workspace_env'
+      ? followed.name
+      : describeDefaultModel(selection, !!onAddModel);
   return (
     <DropdownMenuContent
       side="top"
       align="start"
       collisionPadding={12}
       aria-label="选择模型"
-      className="w-[min(20rem,calc(100vw-1.5rem))] p-1.5"
+      className={cn(PHONE_MENU_CLASS, 'w-[min(18.5rem,calc(100vw-1.5rem))]')}
     >
       <DropdownMenuRadioGroup
         value={selectedKey}
@@ -1314,40 +1353,42 @@ function ModelMenu({
             </span>
           }
           title={defaultSourceLabel(selection)}
-          detail={describeDefaultModel(selection, !!onAddModel)}
+          detail={defaultDetail}
           warning={unusable}
         />
-        <DropdownMenuSeparator />
-        {rows.map((row) => {
-          const text = menuRowText(row, sole.has(row.option.id));
-          return (
-            <MenuRow
-              key={row.key}
-              value={row.key}
-              disabled={disabled || !!optionStatus(row.option)}
-              mark={
-                <VendorTile
-                  vendor={vendorOf(row.option, row.id)}
-                  name={row.option.name}
-                />
-              }
-              title={text.title}
-              detail={text.detail}
-            />
-          );
-        })}
+        <MenuGap />
+        <div role="none" className="divide-y divide-surface-border">
+          {rows.map((row) => {
+            const text = menuRowText(row, sole.has(row.option.id));
+            return (
+              <MenuRow
+                key={row.key}
+                value={row.key}
+                disabled={disabled || !!optionStatus(row.option)}
+                mark={
+                  <VendorTile
+                    vendor={vendorOf(row.option, row.id)}
+                    name={row.option.name}
+                  />
+                }
+                title={text.title}
+                detail={text.detail}
+              />
+            );
+          })}
+        </div>
       </DropdownMenuRadioGroup>
+      <MenuGap />
       {onAddModel && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onAddModel} className="text-primary-text">
-            <Plus aria-hidden="true" />
-            添加模型…
-          </DropdownMenuItem>
-        </>
+        <DropdownMenuItem
+          onSelect={onAddModel}
+          className="rounded-none border-b border-surface-border px-3 text-primary-text"
+        >
+          <Plus aria-hidden="true" />
+          添加模型…
+        </DropdownMenuItem>
       )}
-      <DropdownMenuSeparator />
-      <div className="px-2 py-1">{footer}</div>
+      <div className="px-3 py-2 empty:hidden">{footer}</div>
     </DropdownMenuContent>
   );
 }
@@ -1374,11 +1415,11 @@ function MenuRow({
       disabled={disabled}
       data-model-row=""
       title={title}
-      className="gap-2.5 py-1.5 pl-1.5"
+      className={cn(PHONE_MENU_ROW_CLASS, 'gap-3 py-2')}
     >
       {mark}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-body font-medium text-foreground">
+        <span className="block truncate text-body text-foreground">
           {title}
         </span>
         <span
