@@ -27,10 +27,12 @@ import {
 
 import {
   TEAM_IM_WORD_LIMIT,
+  WORK_NOTE_WORD_LIMIT,
+  WORK_REPORT_STATES,
+  WORK_TITLE_CHAR_LIMIT,
   countImWords,
   type TeamRole,
   type WorkIpcType,
-  type WorkReportState,
   type WorkRouteItem,
   type WorkRouteResultItem,
 } from './work-items.js';
@@ -46,22 +48,9 @@ type WorkIpcResult =
   | { ok: true; data?: Record<string, unknown> }
   | { ok: false; error?: string };
 
-/** The routing note's ceiling, in `countImWords` words. */
-const ROUTE_NOTE_WORD_LIMIT = 30;
-const TITLE_CHAR_LIMIT = 60;
-
 /** Accepting creates sessions and maybe a git worktree, so it waits longer. */
 const ROUTE_TIMEOUT_MS = 120_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
-
-const REPORT_STATES = [
-  'progress',
-  'waiting',
-  'ready',
-  'blocked',
-  'failed',
-  'dropped',
-] as const satisfies readonly WorkReportState[];
 
 function overWordLimit(label: string, value: string, limit: number) {
   // Every word is at least one character, so a short text needs no count.
@@ -97,7 +86,7 @@ function routeItemErrors(item: WorkRouteItem): string[] {
     need('reason');
   }
   if (item.note) {
-    const over = overWordLimit('note', item.note, ROUTE_NOTE_WORD_LIMIT);
+    const over = overWordLimit('note', item.note, WORK_NOTE_WORD_LIMIT);
     if (over) errors.push(over);
   }
   return errors;
@@ -149,10 +138,10 @@ const routeItemSchema = strictObject({
     ),
   title: z
     .string()
-    .max(TITLE_CHAR_LIMIT)
+    .max(WORK_TITLE_CHAR_LIMIT)
     .optional()
     .describe(
-      `accept: a short title for people, at most ${TITLE_CHAR_LIMIT} characters`,
+      `accept: a short title for people, at most ${WORK_TITLE_CHAR_LIMIT} characters`,
     ),
   workItemId: z
     .string()
@@ -168,7 +157,7 @@ const routeItemSchema = strictObject({
     .string()
     .optional()
     .describe(
-      `accept/attach: routing background or an explicit human constraint for the worker, at most ${ROUTE_NOTE_WORD_LIMIT} words; never a plan`,
+      `accept/attach: routing background or an explicit human constraint for the worker, at most ${WORK_NOTE_WORD_LIMIT} words; never a plan`,
     ),
   reason: z
     .string()
@@ -191,14 +180,12 @@ const routeItemSchema = strictObject({
 });
 
 /**
- * `currentInputTurnId` is read when each request is written: the host judges
- * the request by the input it names. Requests carry only the contract's
- * fields; the host never takes the caller from the body.
+ * Requests carry only the contract's fields; the host takes the caller from
+ * the IPC directory, never from the body.
  */
 export function createWorkTools(
   teamRole: TeamRole,
   call: WorkIpcCall,
-  currentInputTurnId: () => string | null | undefined,
 ): SdkMcpToolDefinition<any>[] {
   /**
    * Send and turn the host's answer into tool text. A timeout leaves the
@@ -210,13 +197,7 @@ export function createWorkTools(
     onSuccess: (data: Record<string, unknown>) => string,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<ToolResult> => {
-    const inputTurnId = currentInputTurnId();
-    const request = {
-      type,
-      requestId: randomUUID(),
-      ...(inputTurnId ? { inputTurnId } : {}),
-      ...payload,
-    };
+    const request = { type, requestId: randomUUID(), ...payload };
     let result: WorkIpcResult;
     try {
       result = (await call(
@@ -245,7 +226,7 @@ export function createWorkTools(
 - attach: only when the message explicitly points at that work item (quotes or replies to its request or its messages, names it, or refers to the change just made and exactly one item fits). A similar topic is not enough: accept or ignore it instead. Needs workItemId and an explicit candidate; never attach a hand-back to the item that handed it back.
 - stop: a listed person explicitly asks to stop an item. Needs workItemId and an explicit candidate.
 - ignore: ordinary discussion, thanks, a duplicate, or anything that is not work. Needs reason.
-note is at most ${ROUTE_NOTE_WORD_LIMIT} words of routing background; the worker reads the original message, so never add a plan, requirements or checklists.`,
+note is at most ${WORK_NOTE_WORD_LIMIT} words of routing background; the worker reads the original message, so never add a plan, requirements or checklists.`,
         strict({
           items: z
             .array(routeItemSchema)
@@ -369,7 +350,7 @@ text is at most ${TEAM_IM_WORD_LIMIT} words (a hard ceiling, not a target), in t
 - dropped: nothing for anyone to do (not reproduced, not a defect, already handled); ends the item without a message.
 humanAction is the one concrete question a person must decide; it reaches the router at once with any state, including progress. Report honestly: a draft is not ready, and a failure is reported as failed.`,
       strict({
-        state: z.enum(REPORT_STATES),
+        state: z.enum(WORK_REPORT_STATES),
         summary: z
           .string()
           .trim()
