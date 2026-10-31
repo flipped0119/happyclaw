@@ -21,6 +21,7 @@ import {
   updateAgentStatus,
 } from './db.js';
 import { logger } from './logger.js';
+import { onTeamSessionDeleted } from './work-item-service.js';
 import {
   forgetSessionWorktree,
   removeSessionWorktree,
@@ -42,7 +43,7 @@ export interface CreateConversationSessionInput {
   name?: string;
   description?: string;
   sessionId?: string;
-  sourceKind?: 'manual' | 'automation';
+  sourceKind?: 'manual' | 'automation' | 'team_router' | 'work_item';
   automationId?: string | null;
   /** Created beforehand by the caller; removed again if the insert fails. */
   worktree?: SessionWorktree | null;
@@ -156,5 +157,7 @@ export async function deleteConversationSession(input: {
   forgetSessionWorktree(session.id);
   // Bound automations of the session pause; persistent ones rebind next run.
   getAutomationService()?.onSessionDeleted(laneJid);
+  // Its work item ends, or its group stops routing (team mode).
+  onTeamSessionDeleted(session.id);
   projectWebAgentRemoved(workspaceJid, session.id, session.name);
 }
