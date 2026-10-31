@@ -195,6 +195,24 @@ const POSTING_TOOLS = [
   'feishu_send_card',
   'feishu_api_request',
 ].map((name) => `mcp__happyclaw__${name}`);
+/**
+ * Automations would freeze the group as their route; the session (not Home)
+ * has no skill install tools to withhold.
+ */
+const AUTOMATION_TOOLS = [
+  'schedule_task',
+  'automation_create',
+  'automation_update',
+  'automation_pause',
+  'automation_resume',
+  'automation_complete',
+  'automation_delete',
+  'automation_run_now',
+  'automation_list',
+  'automation_list_runs',
+  'automation_notify_current_run',
+  'automation_silence_current_run',
+].map((name) => `mcp__happyclaw__${name}`);
 
 const runs: Record<string, MainRequest> = {};
 
@@ -247,21 +265,35 @@ describe('Agent Runner team roles, as the model sees them', () => {
   test('the router routes and replies: work tools in, send_message, AskUserQuestion and edits out', () => {
     expect(toolDelta(runs.router)).toEqual({
       added: [...ROUTER_TOOLS].sort(),
-      removed: ['AskUserQuestion', ...FILE_EDIT_TOOLS, ...POSTING_TOOLS].sort(),
+      removed: [
+        'AskUserQuestion',
+        ...FILE_EDIT_TOOLS,
+        ...POSTING_TOOLS,
+        ...AUTOMATION_TOOLS,
+      ].sort(),
     });
   });
 
   test('a writable worker keeps its edit tools and loses only send_message and AskUserQuestion', () => {
     expect(toolDelta(runs.writer)).toEqual({
       added: [...WORKER_TOOLS].sort(),
-      removed: ['AskUserQuestion', ...POSTING_TOOLS].sort(),
+      removed: [
+        'AskUserQuestion',
+        ...POSTING_TOOLS,
+        ...AUTOMATION_TOOLS,
+      ].sort(),
     });
   });
 
   test('a read-only worker also runs without the edit tools', () => {
     expect(toolDelta(runs.reader)).toEqual({
       added: [...WORKER_TOOLS].sort(),
-      removed: ['AskUserQuestion', ...FILE_EDIT_TOOLS, ...POSTING_TOOLS].sort(),
+      removed: [
+        'AskUserQuestion',
+        ...FILE_EDIT_TOOLS,
+        ...POSTING_TOOLS,
+        ...AUTOMATION_TOOLS,
+      ].sort(),
     });
   });
 
