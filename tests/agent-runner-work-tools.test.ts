@@ -359,7 +359,6 @@ describe('router tools over IPC', () => {
     );
     expect(body(request)).toEqual({
       type: 'work_route',
-      inputTurnId: 'turn-1',
       items,
     });
     expect(result.isError).toBeFalsy();
@@ -442,7 +441,6 @@ describe('router tools over IPC', () => {
     );
     expect(body(result.request)).toEqual({
       type: 'work_reply',
-      inputTurnId: 'turn-1',
       purpose: 'result',
       workItemId: 'item-1',
       text: 'Done: the button reads Save.',
@@ -457,7 +455,6 @@ describe('router tools over IPC', () => {
     );
     expect(body(answer.request)).toEqual({
       type: 'work_reply',
-      inputTurnId: 'turn-1',
       purpose: 'answer',
       triggerMessageId: 'om_5',
       text: '是的。',
@@ -522,7 +519,6 @@ describe('router tools over IPC', () => {
     );
     expect(body(request)).toEqual({
       type: 'work_list',
-      inputTurnId: 'turn-1',
       status: 'all',
       limit: 5,
     });
@@ -538,14 +534,13 @@ describe('router tools over IPC', () => {
     );
     expect(body(empty.request)).toEqual({
       type: 'work_list',
-      inputTurnId: 'turn-1',
     });
     expect(textOf(empty.result)).toBe('No work items.');
   });
 
-  test('a request without a current input omits inputTurnId', async () => {
+  test('a request names no input turn, even while one is current', async () => {
     const env = await setup(ROUTER);
-    env.ctx.currentInputTurnId = null;
+    expect(env.ctx.currentInputTurnId).toBe('turn-1');
     const { request } = await exchange(
       env,
       'work_list',
@@ -567,7 +562,6 @@ describe('worker tools over IPC', () => {
     );
     expect(body(first.request)).toEqual({
       type: 'work_ack',
-      inputTurnId: 'turn-1',
       triggerMessageId: 'om_1',
       text: 'On it: reproducing the crash.',
     });
@@ -593,7 +587,6 @@ describe('worker tools over IPC', () => {
     );
     expect(body(ready.request)).toEqual({
       type: 'work_report',
-      inputTurnId: 'turn-1',
       state: 'ready',
       summary: 'PR #3 renames the button; tests pass.',
     });
@@ -612,7 +605,6 @@ describe('worker tools over IPC', () => {
     );
     expect(body(asking.request)).toEqual({
       type: 'work_report',
-      inputTurnId: 'turn-1',
       state: 'progress',
       summary: 'Two labels fit.',
       humanAction: 'Save or Apply?',
@@ -664,7 +656,6 @@ describe('worker tools over IPC', () => {
     );
     expect(body(request)).toEqual({
       type: 'work_handback',
-      inputTurnId: 'turn-1',
       triggerMessageId: 'om_8',
       reason: 'It asks about another page.',
     });

@@ -29,7 +29,7 @@ import {
 } from './fresh-window.js';
 import { createAutomationTools } from './automation-tools.js';
 import { createWorkTools } from './work-tools.js';
-import type { TeamRole } from './work-items.js';
+import { teamLaneWithholdsTool, type TeamRole } from './work-items.js';
 
 /** Context required by MCP tools. Passed at construction time. */
 export interface McpContext {
@@ -2322,28 +2322,6 @@ Use the skills panel in the UI to find the skill ID (directory name, e.g. "memor
 }
 
 /**
- * Tools a team-mode session does not get (the host refuses them from these
- * lanes too). Those that post to the chat directly: the session speaks only
- * through its work tools. Automations (and the retired schedule_task that
- * points at them): one made in a team lane would freeze the group as its
- * route and post its failures there. Skill installs, which reset the session.
- */
-const TEAM_WITHHELD_TOOL_NAMES = new Set([
-  'send_message',
-  'send_image',
-  'send_file',
-  'feishu_send_card',
-  'feishu_api_request',
-  'schedule_task',
-  'install_skill',
-  'uninstall_skill',
-]);
-
-function withheldFromTeam(name: string): boolean {
-  return TEAM_WITHHELD_TOOL_NAMES.has(name) || name.startsWith('automation_');
-}
-
-/**
  * A team-mode session speaks only through its work tools: the router posts
  * with `work_reply`, a worker acknowledges with `work_ack`.
  */
@@ -2354,12 +2332,9 @@ function withTeamTools(
 ): SdkMcpToolDefinition<any>[] {
   const tasksDir = path.join(ctx.workspaceIpc, 'tasks');
   return [
-    ...tools.filter((definition) => !withheldFromTeam(definition.name)),
-    ...createWorkTools(
-      teamRole,
-      (request, resultPrefix, timeoutMs) =>
-        pollIpcResult(tasksDir, request, resultPrefix, timeoutMs),
-      () => ctx.currentInputTurnId,
+    ...tools.filter((definition) => !teamLaneWithholdsTool(definition.name)),
+    ...createWorkTools(teamRole, (request, resultPrefix, timeoutMs) =>
+      pollIpcResult(tasksDir, request, resultPrefix, timeoutMs),
     ),
   ];
 }
