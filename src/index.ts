@@ -676,13 +676,15 @@ export function formatMessages(
 }
 
 /**
- * Inputs no person typed: automation runs, and prompts of the retired
+ * Inputs no person typed: automation runs, team-mode inputs the host
+ * composed, and prompts of the retired
  * scheduled tasks that are only kept for history. They never wake a
  * usage-limit wait or vouch for an IM owner.
  */
 function isUnattendedInput(message: NewMessage): boolean {
   return (
     automationRunIdOf(message) !== null ||
+    message.source_kind === 'work_item_input' ||
     message.source_kind === 'scheduled_task_prompt' ||
     !!message.task_id
   );
