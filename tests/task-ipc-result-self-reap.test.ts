@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
 import { isIpcTaskResultFile } from '../src/ipc-delivery-recovery.js';
+import { WORK_IPC_TYPES } from '../src/work-items.js';
 
 const runnerSrc = path.join(process.cwd(), 'container', 'agent-runner', 'src');
 
@@ -116,6 +117,12 @@ function collectTaskResultPrefixes(): string[] {
       const callbackFactory = ts.isIdentifier(prefixArg)
         ? callbackFactoryOf(call, prefixArg.text)
         : null;
+      // The team tools' types are a const array (WORK_IPC_TYPES), not a
+      // literal union the scan can read.
+      if (callbackFactory === 'createWorkTools') {
+        for (const type of WORK_IPC_TYPES) prefixes.add(`${type}_result`);
+        continue;
+      }
       if (callbackFactory && CALLBACK_RESULT_TYPES[callbackFactory]) {
         const types = unions.get(CALLBACK_RESULT_TYPES[callbackFactory]) ?? [];
         expect(
@@ -195,6 +202,8 @@ describe('task IPC result files are never consumed as requests', () => {
         'happyclaw_owner_profile_result',
         'automation_create_result',
         'automation_notify_current_run_result',
+        'work_route_result',
+        'work_report_result',
       ]),
     );
   });

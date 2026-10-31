@@ -1378,11 +1378,16 @@ function handleWorkReport(
   if (!summary) fail('summary is required.');
   const humanAction = optionalText(payload.humanAction, 1000);
   const questionFor = optionalText(payload.questionForMessageId, 200);
+  // An omitted humanAction keeps the open question; null clears it.
   const patch: WorkItemPatch = {
     lastReport: state,
     lastSummary: summary,
-    attention: humanAction,
-    attentionMessageId: humanAction ? questionFor : null,
+    ...(payload.humanAction !== undefined
+      ? {
+          attention: humanAction,
+          attentionMessageId: humanAction ? questionFor : null,
+        }
+      : {}),
   };
   let updated: WorkItem;
   if (state === 'ready' && (item.mandate.writable || item.approvedAt)) {

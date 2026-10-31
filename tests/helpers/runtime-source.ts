@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { isAutomationTurnInput } from '../../src/agent-builder-turn-auth.js';
 import * as automationLedger from '../../src/automation-run-ledger.js';
 import { canDeleteAcknowledgedIpcSource } from '../../src/host-ipc-output-router.js';
+import { WORK_IPC_TYPES } from '../../src/work-items.js';
 
 // Execute whole production functions with explicit dependencies, without
 // importing index.ts (which starts the server). No routing/cursor algorithm is
@@ -72,6 +73,14 @@ function automationDefaults(): Record<string, unknown> {
     rememberAutomationRuns: () => {},
     settleCurrentAutomationRun: () => {},
     UNSETTLED_RUN_OUTCOME: { status: 'interrupted', error: 'unsettled' },
+    // Team mode: no session has a team role and no message a team decision.
+    WORK_IPC_TYPES,
+    resolveTeamRole: () => null,
+    teamRoleKey: () => null,
+    resolveTeamRoute: () => null,
+    afterTeamMessageStored: () => {},
+    followupCopyIdsOf: () => [],
+    getAgentBuilderInputMessage: () => null,
   };
 }
 
