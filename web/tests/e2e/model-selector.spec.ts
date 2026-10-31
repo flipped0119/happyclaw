@@ -14,11 +14,28 @@ interface Selection {
   selectedEffort: string | null;
 }
 
-function payload(selection: Selection) {
+/**
+ * Past seven models a phone lists them in the sheet with search; fewer open
+ * as a menu over the pill. `few` drops the relay that makes it eight.
+ */
+const RELAY = {
+  id: 'relay',
+  name: '中转站',
+  kind: 'third_party',
+  model: 'relay-a',
+  usable: true,
+  models: ['relay-a', 'relay-b', 'relay-c', 'relay-d'].map((id) => ({
+    id,
+    contextWindow: null,
+  })),
+};
+
+function payload(selection: Selection, few = false) {
   return {
     ...selection,
     default: { source: 'none', modelConfigId: null },
     options: [
+      ...(few ? [] : [RELAY]),
       {
         id: 'official',
         name: 'Claude 官方',
@@ -66,7 +83,7 @@ function payload(selection: Selection) {
 async function openHarness(
   page: Page,
   initial: Partial<Selection> = {},
-  { openCard = true }: { openCard?: boolean } = {},
+  { openCard = true, few = false }: { openCard?: boolean; few?: boolean } = {},
 ) {
   const state: Selection = {
     selectedModelConfigId: null,
@@ -83,7 +100,7 @@ async function openHarness(
       state.selectedModel = (body.model as string) ?? null;
       state.selectedEffort = (body.effort as string) ?? null;
     }
-    await route.fulfill({ json: payload(state) });
+    await route.fulfill({ json: payload(state, few) });
   });
   await page.goto(HARNESS_PATH);
   if (openCard) {
@@ -339,6 +356,73 @@ test.describe('phone model sheet', () => {
     });
     await page.mouse.up();
     await expect(sheet).toHaveCount(0);
+  });
+});
+
+test.describe('phone model menu', () => {
+  test.beforeEach(({ isMobile }) => {
+    test.skip(!isMobile, 'few models open as a menu on a phone');
+  });
+
+  test('few models open as a menu over the pill; a pick saves and closes it', async ({
+    page,
+  }) => {
+    const { puts } = await openHarness(page, {}, { few: true });
+    await expectRowFits(page);
+    await modelButton(page).tap();
+    const menu = page.getByRole('menu', { name: '选择模型' });
+    await expect(menu).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '选择模型' })).toHaveCount(0);
+    await settleAnimations(menu);
+    // Over the pill, inside the screen, every row a 44px tap.
+    const [box, pill, width] = await Promise.all([
+      menu.boundingBox(),
+      modelButton(page).boundingBox(),
+      page.evaluate(() => window.innerWidth),
+    ]);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(pill!.y + 0.5);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 0.5);
+    for (const row of await menu.locator('[data-model-row]').all()) {
+      expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await expect(menu.getByPlaceholder('搜索模型')).toHaveCount(0);
+
+    await modelRow(page, 'gpt-6-astra').tap();
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => puts.length).toBe(1);
+    expect(puts[0]).toMatchObject({
+      modelConfigId: 'chatgpt',
+      model: 'gpt-6-astra',
+    });
+    // The composer folds back to its resting pill, as after the sheet.
+    await expect.poll(() => dockState(page)).toBe('pill');
+    await expect(modelButton(page)).toHaveAttribute(
+      'aria-label',
+      /gpt-6-astra/,
+    );
+  });
+
+  test('the effort sits on its own chip, each level saying what it trades', async ({
+    page,
+  }) => {
+    const { puts } = await openHarness(
+      page,
+      { selectedModelConfigId: 'chatgpt', selectedModel: 'gpt-6-astra' },
+      { few: true },
+    );
+    await expectRowFits(page);
+    const chip = page.locator('[data-hc-composer] [data-effort-chip]');
+    await expect(chip).toHaveText('中');
+    expect((await chip.boundingBox())!.height).toBe(34);
+    await chip.tap();
+    await expect(page.getByText('最快，简单的事够用')).toBeVisible();
+    await page.getByRole('menuitemradio', { name: /^高/ }).tap();
+    await expect.poll(() => puts.length).toBe(1);
+    expect(puts[0]).toMatchObject({ model: 'gpt-6-astra', effort: 'high' });
+    await expect.poll(() => dockState(page)).toBe('pill');
+    await openComposerCard(page);
+    await expect(chip).toHaveText('高');
   });
 });
 

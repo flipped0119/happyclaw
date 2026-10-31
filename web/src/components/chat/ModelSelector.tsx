@@ -27,6 +27,7 @@ import type { ConnectionModel } from '@/types';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -354,6 +355,46 @@ function rowDetail(row: ModelRow): string {
     .filter(Boolean)
     .join(' · ');
 }
+
+/**
+ * How a row reads in a phone's model menu. A connection with one model goes
+ * by its own name, which its owner keeps short, with the model on the second
+ * line; one with several models keeps the model first.
+ */
+function menuRowText(
+  row: ModelRow,
+  sole: boolean,
+): { title: string; detail: string } {
+  if (!sole) return { title: row.id || '由中转站决定', detail: rowDetail(row) };
+  return {
+    title: row.option.name,
+    detail: [
+      row.id || '由中转站决定',
+      row.contextWindow
+        ? `${formatTokenCount(row.contextWindow)} 上下文`
+        : null,
+      row.note,
+      optionStatus(row.option),
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  };
+}
+
+/**
+ * A phone lists up to this many models as a menu over the pill, the way an
+ * iOS app's Menu does (Jarvis's model chip); more get the sheet with search.
+ */
+const PHONE_MENU_MAX_ROWS = 7;
+
+/** What each level trades, under its name in the effort menu (after Jarvis). */
+const EFFORT_HINTS: Record<string, string> = {
+  low: '最快，简单的事够用',
+  medium: '快一些',
+  high: '多数任务够用',
+  xhigh: '更仔细，也更慢、更贵',
+  max: '最慢最仔细',
+};
 
 // ─── Recently used ─────────────────────────────────────────────
 
@@ -716,6 +757,22 @@ export function ModelSelector({
       ? rowKey(inUse.option.id, inUse.model)
       : DEFAULT_ROW_KEY;
   const effortContext = resolveEffortContext(selection);
+  const rows = selection.options.flatMap((option) =>
+    optionRows(
+      option,
+      option.id === selection.selectedModelConfigId ? pinnedModel : null,
+    ),
+  );
+  // Few models: a phone opens a menu over the pill and sets the effort on a
+  // chip of its own; more keep the sheet with search and the levels in it.
+  const menu = phone && rows.length <= PHONE_MENU_MAX_ROWS;
+  const sole = new Set(
+    selection.options
+      .filter(
+        (option) => rows.filter((row) => row.option === option).length === 1,
+      )
+      .map((option) => option.id),
+  );
   // The trigger names the model in use, without where the default came from.
   const unusable = !picked && defaultUnusable(selection);
   const triggerName = unusable
@@ -734,6 +791,11 @@ export function ModelSelector({
   const tooltip = picked
     ? fullLabel
     : `${defaultSourceLabel(selection)} · ${fullLabel}`;
+  // The menu's rows and the pill name a one-model connection the same way.
+  const pillName =
+    menu && !unusable && inUse.option && sole.has(inUse.option.id)
+      ? inUse.option.name
+      : triggerName;
 
   const pickRow = (row: ModelRow | null) => {
     const modelConfigId = row ? row.option.id : null;
@@ -815,6 +877,14 @@ export function ModelSelector({
   const disabled = !canChange || saving;
   const effortDisabled =
     disabled || (!!effortContext && !!optionStatus(effortContext.option));
+  // What a phone's effort chip says when tapped while it cannot change.
+  const effortBlocked = !canChange
+    ? '你没有修改此工作区配置的权限'
+    : saving
+      ? '正在切换模型，请稍候再试'
+      : effortContext
+        ? optionStatus(effortContext.option)
+        : '';
   const shown = effortContext ? effortShown(effortContext) : null;
   const panel = (
     <ModelPanel
@@ -879,8 +949,12 @@ export function ModelSelector({
 
   // A sheet on phones and narrow windows, a popover otherwise; both roots
   // hand the trigger its open state and popup semantics.
-  const Root = inSheet ? Sheet : Popover;
-  const Trigger = inSheet ? SheetTrigger : PopoverTrigger;
+  const Root = menu ? DropdownMenu : inSheet ? Sheet : Popover;
+  const Trigger = menu
+    ? DropdownMenuTrigger
+    : inSheet
+      ? SheetTrigger
+      : PopoverTrigger;
   return (
     <>
       <Root open={open} onOpenChange={handleOpenChange}>
@@ -893,10 +967,19 @@ export function ModelSelector({
               // Never disabled outright: a tap says why (handleOpenChange).
               aria-disabled={disabled || undefined}
               aria-label={`模型：${fullLabel}${
-                shown ? `，推理等级：${shown.spoken}` : ''
+                shown && !menu ? `，推理等级：${shown.spoken}` : ''
               }`}
               data-model-pill={compact ? 'compact' : ''}
               className={phonePillClass(compact)}
+              // A menu opens on press or a key. A click with no press behind
+              // it (the ⋯ sheet's 切换模型 clicks the pill) opens it too.
+              onClick={
+                menu
+                  ? (event) => {
+                      if (event.detail === 0 && !open) handleOpenChange(true);
+                    }
+                  : undefined
+              }
             >
               {mark}
               {!compact && (
@@ -907,9 +990,9 @@ export function ModelSelector({
                       unusable && 'text-warning',
                     )}
                   >
-                    {triggerName}
+                    {pillName}
                   </span>
-                  {shown?.level && (
+                  {shown?.level && !menu && (
                     <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
                       <span
                         className="text-muted-foreground"
@@ -957,7 +1040,22 @@ export function ModelSelector({
             <TooltipContent side="top">{tooltip}</TooltipContent>
           </Tooltip>
         )}
-        {inSheet ? (
+        {menu ? (
+          <ModelMenu
+            selection={selection}
+            rows={rows}
+            sole={sole}
+            selectedKey={selectedKey}
+            disabled={disabled}
+            onPick={pickRow}
+            onAddModel={
+              canManageModels ? () => navigate('/settings?tab=claude') : null
+            }
+            footer={
+              <ConversationContextUsageLine jid={groupJid} agentId={agentId} />
+            }
+          />
+        ) : inSheet ? (
           <SheetContent
             side="bottom"
             detents
@@ -991,10 +1089,12 @@ export function ModelSelector({
           </PopoverContent>
         )}
       </Root>
-      {effortContext && !phone && (
+      {effortContext && (!phone || (menu && !compact)) && (
         <EffortMenu
           context={effortContext}
           disabled={effortDisabled}
+          touch={phone}
+          blocked={effortBlocked}
           onPick={pickEffort}
         />
       )}
@@ -1034,27 +1134,54 @@ function UnavailablePill({
 interface EffortMenuProps {
   context: EffortContext;
   disabled: boolean;
+  /** A phone: the model pill's chip, never disabled outright. */
+  touch?: boolean;
+  /** Why a phone's chip cannot change now, said when tapped. */
+  blocked?: string;
   onPick: (effort: string | null) => void;
 }
 
 /** The reasoning effort of the model in use, next to the model control. */
-function EffortMenu({ context, disabled, onPick }: EffortMenuProps) {
+function EffortMenu({
+  context,
+  disabled,
+  touch = false,
+  blocked = '',
+  onPick,
+}: EffortMenuProps) {
   const tooltip = useQuietTooltip();
+  // Open, it keeps a phone's composer card from folding to the resting pill
+  // (which has no effort chip) when the editor loses focus to it.
+  const [open, setOpen] = useDockOverlay();
   const { level, spoken } = effortShown(context);
   // The accessible name carries the level the control shows.
   const name = `推理等级：${spoken}，选择推理等级`;
+  // Like the model pill, a phone's chip says why instead of doing nothing.
+  const handleOpenChange = (next: boolean) => {
+    if (next && touch && disabled) {
+      showToast('无法调整推理等级', blocked || '请稍候再试');
+      return;
+    }
+    tooltip.onMenuOpenChange(next);
+    setOpen(next);
+  };
   return (
-    <DropdownMenu onOpenChange={tooltip.onMenuOpenChange}>
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <Tooltip open={tooltip.open} onOpenChange={tooltip.onOpenChange}>
         <DropdownMenuTrigger asChild>
           <TooltipTrigger asChild>
             <button
               type="button"
-              disabled={disabled}
+              disabled={disabled && !touch}
+              aria-disabled={(disabled && touch) || undefined}
               aria-label={name}
-              title={disabled ? name : undefined}
+              data-effort-chip={touch ? '' : undefined}
+              title={disabled && !touch ? name : undefined}
               {...tooltip.triggerProps}
-              className={cn(TRIGGER_CLASS, 'shrink-0')}
+              className={cn(
+                touch ? phonePillClass(false) : TRIGGER_CLASS,
+                'shrink-0',
+              )}
             >
               <Brain
                 className="size-4 shrink-0 text-muted-foreground"
@@ -1079,7 +1206,7 @@ function EffortMenu({ context, disabled, onPick }: EffortMenuProps) {
         align="start"
         collisionPadding={8}
         onCloseAutoFocus={keepFocusThatMovedOn}
-        className="w-56 max-w-[calc(100vw-2rem)]"
+        className="w-64 max-w-[calc(100vw-2rem)]"
       >
         <DropdownMenuLabel className="flex items-center gap-1.5">
           推理等级
@@ -1103,7 +1230,17 @@ function EffortMenu({ context, disabled, onPick }: EffortMenuProps) {
           <DropdownMenuSeparator />
           {context.efforts.map((effort) => (
             <DropdownMenuRadioItem key={effort} value={effort}>
-              {effortLabel(effort)}
+              <span className="flex min-w-0 flex-col">
+                {effortLabel(effort)}
+                {EFFORT_HINTS[effort] && (
+                  <span
+                    data-effort-hint=""
+                    className="text-caption text-muted-foreground"
+                  >
+                    {EFFORT_HINTS[effort]}
+                  </span>
+                )}
+              </span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
@@ -1113,6 +1250,147 @@ function EffortMenu({ context, disabled, onPick }: EffortMenuProps) {
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+interface ModelMenuProps {
+  selection: SessionModelSelection;
+  /** Every model of every connection, in the order the sheet lists them. */
+  rows: ModelRow[];
+  /** Connections that offer a single model. */
+  sole: Set<string>;
+  selectedKey: string;
+  disabled: boolean;
+  /** Null picks the default. */
+  onPick: (row: ModelRow | null) => void;
+  /** Opens Settings to add a model; null for whoever may not. */
+  onAddModel: (() => void) | null;
+  footer: ReactNode;
+}
+
+/**
+ * A phone's model choice when there are few to choose from, after Jarvis's
+ * model chip and iOS's Menu: it opens over the pill with a check on the one
+ * in use and closes on a pick. No search, rail or hint: the toast says when
+ * the pick applies, and the effort has its own chip.
+ */
+function ModelMenu({
+  selection,
+  rows,
+  sole,
+  selectedKey,
+  disabled,
+  onPick,
+  onAddModel,
+  footer,
+}: ModelMenuProps) {
+  const unusable = defaultUnusable(selection);
+  return (
+    <DropdownMenuContent
+      side="top"
+      align="start"
+      collisionPadding={12}
+      aria-label="选择模型"
+      className="w-[min(20rem,calc(100vw-1.5rem))] p-1.5"
+    >
+      <DropdownMenuRadioGroup
+        value={selectedKey}
+        onValueChange={(key) => {
+          if (key === DEFAULT_ROW_KEY) {
+            onPick(null);
+            return;
+          }
+          const row = rows.find((item) => item.key === key);
+          if (row) onPick(row);
+        }}
+      >
+        <MenuRow
+          value={DEFAULT_ROW_KEY}
+          // A default that cannot run is not offered as a choice.
+          disabled={disabled || (unusable && selectedKey !== DEFAULT_ROW_KEY)}
+          mark={
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-selected text-muted-foreground">
+              <Sparkles className="size-3.5" aria-hidden="true" />
+            </span>
+          }
+          title={defaultSourceLabel(selection)}
+          detail={describeDefaultModel(selection, !!onAddModel)}
+          warning={unusable}
+        />
+        <DropdownMenuSeparator />
+        {rows.map((row) => {
+          const text = menuRowText(row, sole.has(row.option.id));
+          return (
+            <MenuRow
+              key={row.key}
+              value={row.key}
+              disabled={disabled || !!optionStatus(row.option)}
+              mark={
+                <VendorTile
+                  vendor={vendorOf(row.option, row.id)}
+                  name={row.option.name}
+                />
+              }
+              title={text.title}
+              detail={text.detail}
+            />
+          );
+        })}
+      </DropdownMenuRadioGroup>
+      {onAddModel && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onAddModel} className="text-primary-text">
+            <Plus aria-hidden="true" />
+            添加模型…
+          </DropdownMenuItem>
+        </>
+      )}
+      <DropdownMenuSeparator />
+      <div className="px-2 py-1">{footer}</div>
+    </DropdownMenuContent>
+  );
+}
+
+function MenuRow({
+  value,
+  disabled,
+  mark,
+  title,
+  detail,
+  warning = false,
+}: {
+  value: string;
+  disabled: boolean;
+  mark: ReactNode;
+  title: string;
+  detail: string;
+  /** The second line says why this cannot run. */
+  warning?: boolean;
+}) {
+  return (
+    <DropdownMenuRadioItem
+      value={value}
+      disabled={disabled}
+      data-model-row=""
+      title={title}
+      className="gap-2.5 py-1.5 pl-1.5"
+    >
+      {mark}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-body font-medium text-foreground">
+          {title}
+        </span>
+        <span
+          className={cn(
+            'block truncate text-caption',
+            warning ? 'text-warning' : 'text-muted-foreground',
+          )}
+        >
+          {detail}
+        </span>
+      </span>
+    </DropdownMenuRadioItem>
   );
 }
 

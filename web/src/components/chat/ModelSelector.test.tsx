@@ -14,6 +14,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   put: vi.fn(),
+  toast: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   canManage: false,
@@ -45,7 +46,10 @@ vi.mock('react-router-dom', async (importOriginal) => ({
   useNavigate: () => mocks.navigate,
 }));
 vi.mock('sonner', () => ({
-  toast: { success: mocks.toastSuccess, error: mocks.toastError },
+  toast: Object.assign(mocks.toast, {
+    success: mocks.toastSuccess,
+    error: mocks.toastError,
+  }),
 }));
 
 const {
@@ -269,8 +273,14 @@ async function openEffort() {
 const effortItems = () => [
   ...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
 ];
+/** An item's text without the hint under a level. */
+const itemText = (item: HTMLElement) => {
+  const copy = item.cloneNode(true) as HTMLElement;
+  copy.querySelector('[data-effort-hint]')?.remove();
+  return copy.textContent;
+};
 const effortItem = (text: string) =>
-  effortItems().find((item) => item.textContent === text);
+  effortItems().find((item) => itemText(item) === text);
 
 /** A connection whose models take reasoning efforts (a current server). */
 function effortSelection(
@@ -300,6 +310,28 @@ function effortSelection(
     ],
   };
 }
+
+/** Enough models that a phone lists them in the sheet, not a menu. */
+function crowded(base: SessionModelSelection): SessionModelSelection {
+  return {
+    ...base,
+    options: [
+      ...base.options,
+      {
+        id: 'relay',
+        name: '中转',
+        kind: 'third_party',
+        model: 'm1',
+        usable: true,
+        models: [entry('m1'), entry('m2'), entry('m3'), entry('m4')],
+      },
+    ],
+  };
+}
+const crowdedEffort = (overrides?: Partial<SessionModelSelection>) =>
+  crowded(effortSelection(overrides));
+const crowdedChatGpt = (...args: Parameters<typeof chatGptSelection>) =>
+  crowded(chatGptSelection(...args));
 
 const railButton = (label: string) =>
   document.querySelector<HTMLButtonElement>(
@@ -1122,11 +1154,7 @@ describe('reasoning effort', () => {
     );
     await openEffort();
     // 默认 stands alone, with no level after it.
-    expect(effortItems().map((item) => item.textContent)).toEqual([
-      '默认',
-      '低',
-      '高',
-    ]);
+    expect(effortItems().map(itemText)).toEqual(['默认', '低', '高']);
     expect(effortItem('默认')?.getAttribute('aria-checked')).toBe('true');
     await click(effortItem('高'));
     expect(mocks.put).toHaveBeenCalledWith(
@@ -1157,7 +1185,7 @@ describe('reasoning effort', () => {
     );
     await render('session-1');
     await openEffort();
-    expect(effortItems().map((item) => item.textContent)).toEqual([
+    expect(effortItems().map(itemText)).toEqual([
       '默认 · 高',
       '低',
       '中',
@@ -1434,13 +1462,13 @@ const segment = (text: string) =>
     (button) => button.textContent === text,
   );
 
-describe('on a phone', () => {
+describe('on a phone with many models', () => {
   beforeEach(() => emulate(PHONE, NARROW));
   afterEach(() => vi.restoreAllMocks());
 
   test('one 12px pill names the model and its level', async () => {
     mocks.get.mockResolvedValue(
-      effortSelection({ selectedModelConfigId: 'official' }),
+      crowdedEffort({ selectedModelConfigId: 'official' }),
     );
     await render(null);
     expect(trigger()).toBe(pill());
@@ -1462,7 +1490,7 @@ describe('on a phone', () => {
 
     // A model without efforts: the model alone.
     mocks.get.mockResolvedValue(
-      effortSelection({
+      crowdedEffort({
         selectedModelConfigId: 'official',
         selectedModel: 'haiku',
       }),
@@ -1475,7 +1503,7 @@ describe('on a phone', () => {
   });
 
   test('a level Claude Code picks itself leaves the pill to the model', async () => {
-    const base = effortSelection({ selectedModelConfigId: 'official' });
+    const base = crowdedEffort({ selectedModelConfigId: 'official' });
     base.options[0].models![0] = {
       ...entry('opus'),
       efforts: ['low', 'high'],
@@ -1489,7 +1517,7 @@ describe('on a phone', () => {
   });
 
   test('the sheet opens at half height with the levels under the model in use', async () => {
-    const pinned = effortSelection({ selectedModelConfigId: 'official' });
+    const pinned = crowdedEffort({ selectedModelConfigId: 'official' });
     mocks.get.mockResolvedValue(pinned);
     mocks.put.mockResolvedValue({ ...pinned, selectedEffort: 'high' });
     await render(null);
@@ -1522,7 +1550,7 @@ describe('on a phone', () => {
   });
 
   test('following the default, the levels sit under 默认 and name its model', async () => {
-    const following = effortSelection({
+    const following = crowdedEffort({
       default: {
         source: 'system_main',
         modelConfigId: 'official',
@@ -1551,7 +1579,7 @@ describe('on a phone', () => {
 
   test('a model without efforts gets no row', async () => {
     mocks.get.mockResolvedValue(
-      effortSelection({
+      crowdedEffort({
         selectedModelConfigId: 'official',
         selectedModel: 'haiku',
       }),
@@ -1564,7 +1592,7 @@ describe('on a phone', () => {
 
   test('the levels are read-only while the login must be redone', async () => {
     mocks.get.mockResolvedValue(
-      chatGptSelection(
+      crowdedChatGpt(
         { selectedModelConfigId: 'chatgpt' },
         { needsReauth: true },
       ),
@@ -1574,6 +1602,90 @@ describe('on a phone', () => {
     expect(segments()!.disabled).toBe(true);
     await click(segment('高'));
     expect(mocks.put).not.toHaveBeenCalled();
+  });
+});
+
+describe("a phone's model menu", () => {
+  beforeEach(() => emulate(PHONE, NARROW));
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A menu row's second line (its first span is the check indicator). */
+  const menuDetail = (title: string) =>
+    row(title)?.querySelector(':scope > span:last-child')?.lastElementChild
+      ?.textContent ?? '';
+
+  function few(): SessionModelSelection {
+    const base = effortSelection({ selectedModelConfigId: 'glm' });
+    base.options[1].models = [entry('glm-5.3', { contextWindow: 1_000_000 })];
+    return base;
+  }
+
+  test('opens over the pill, a one-model connection named by its own name', async () => {
+    mocks.get.mockResolvedValue(few());
+    mocks.put.mockResolvedValue(few());
+    await render(null);
+    expect(pill()!.textContent).toBe('GLM');
+    await open();
+    expect(sheet()).toBeNull();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(titles()).toEqual(['未选择模型', 'opus', 'sonnet', 'haiku', 'GLM']);
+    expect(menuDetail('GLM')).toContain('glm-5.3');
+    expect(menuDetail('opus')).toContain('Claude 官方');
+    expect(checked().map((item) => item.getAttribute('title'))).toEqual([
+      'GLM',
+    ]);
+    // No search, rail or hint.
+    expect(document.querySelector('input[aria-label="搜索模型"]')).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      '切换模型会开启新的底层会话',
+    );
+
+    await click(row('opus'));
+    expect(mocks.put).toHaveBeenCalledWith(
+      '/api/groups/web%3Aws/model-selection',
+      { agentId: null, modelConfigId: 'official' },
+    );
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  test('the effort has its own chip, each level saying what it trades', async () => {
+    mocks.get.mockResolvedValue(
+      effortSelection({ selectedModelConfigId: 'official' }),
+    );
+    await render(null);
+    expect(pill()!.textContent).toBe('opus');
+    expect(pill()!.getAttribute('aria-label')).toBe('模型：Claude 官方 · opus');
+    expect(effortTrigger()!.textContent).toBe('超高');
+    expect(effortTrigger()!.className).toContain('h-[34px]');
+    await openEffort();
+    expect(effortItems().map(itemText)).toEqual([
+      '默认 · 超高',
+      '低',
+      '中',
+      '高',
+      '超高',
+      '最高',
+    ]);
+    expect(
+      effortItem('低')!.querySelector('[data-effort-hint]')!.textContent,
+    ).toBe('最快，简单的事够用');
+  });
+
+  test('without the right to change it, the effort chip says why instead of opening', async () => {
+    mocks.get.mockResolvedValue(
+      effortSelection({ selectedModelConfigId: 'official' }),
+    );
+    await render(null, false);
+    expect(effortTrigger()!.disabled).toBe(false);
+    expect(effortTrigger()!.getAttribute('aria-disabled')).toBe('true');
+    await openEffort();
+    expect(effortItems()).toEqual([]);
+    expect(mocks.toast).toHaveBeenCalledWith(
+      '无法调整推理等级',
+      expect.objectContaining({
+        description: '你没有修改此工作区配置的权限',
+      }),
+    );
   });
 });
 
@@ -1733,11 +1845,7 @@ describe('efforts come from the model list', () => {
     await render(null);
     expect(effortTrigger()!.textContent).toBe('高');
     await openEffort();
-    expect(effortItems().map((item) => item.textContent)).toEqual([
-      '默认 · 高',
-      '低',
-      '高',
-    ]);
+    expect(effortItems().map(itemText)).toEqual(['默认 · 高', '低', '高']);
     expect(document.querySelector('[role="menu"]')?.textContent).toContain(
       badge,
     );
