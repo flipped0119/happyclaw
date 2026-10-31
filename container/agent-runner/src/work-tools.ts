@@ -186,7 +186,7 @@ const routeItemSchema = strictObject({
     )
     .optional()
     .describe(
-      'Inferred candidates: exactly one entry for every enabled rule, matched or not',
+      'Inferred candidates (accept or ignore): exactly one entry per rule in <team_rules>, matched or not',
     ),
 });
 
@@ -241,7 +241,7 @@ export function createWorkTools(
       tool(
         'work_route',
         `Decide team candidates (<team_candidate> inputs), one item per candidate, several in one call. Each item is judged on its own and gets its own result.
-- accept: new work. Needs title and acknowledgement. An inferred candidate needs ruleAssessments with one entry for every enabled rule and at least one matched; under acceptMode observe it is only recorded.
+- accept: new work. Needs title and acknowledgement. An inferred candidate needs ruleAssessments with exactly one entry per rule in its <team_rules> and at least one matched; with mode="observe" the accept is only recorded, nothing is created.
 - attach: only when the message explicitly points at that work item (quotes or replies to its request or its messages, names it, or refers to the change just made and exactly one item fits). A similar topic is not enough: accept or ignore it instead. Needs workItemId and an explicit candidate; never attach a hand-back to the item that handed it back.
 - stop: a listed person explicitly asks to stop an item. Needs workItemId and an explicit candidate.
 - ignore: ordinary discussion, thanks, a duplicate, or anything that is not work. Needs reason.
@@ -280,7 +280,7 @@ note is at most ${ROUTE_NOTE_WORD_LIMIT} words of routing background; the worker
       tool(
         'work_reply',
         `Post one message in the group. This is the only way the team speaks; the host replies under the right message.
-- result: deliver a work item's result. Only when its last report is ready (a <work_report state="ready"> arrived). Needs workItemId.
+- result: deliver a work item's outcome. Only when its last report is ready, or blocked or failed (then say it cannot be done as asked and why). Needs workItemId.
 - attention: ask the one question a work item is waiting on a person for (its <work_report> carried attention). Needs workItemId; copy the question faithfully.
 - answer: a short direct answer to a candidate that asked a question and belongs to no work item. Needs triggerMessageId.
 text is at most ${TEAM_IM_WORD_LIMIT} words (a hard ceiling, not a target), in the group's language; write a fresh message from the report's facts instead of forwarding it. Do not repeat an outcome already posted. A refused reply is final: do not rephrase it into another purpose or send it some other way.`,
@@ -364,7 +364,7 @@ text is at most ${TEAM_IM_WORD_LIMIT} words (a hard ceiling, not a target), in t
 - progress: internal bookkeeping; updates the item and wakes no one.
 - waiting: you are idle until a person or a follow-up moves the item.
 - ready: the result is usable and verified as far as you can; summary states the outcome a person cares about, then the evidence.
-- blocked: you cannot go on until a person acts; name the concrete missing prerequisite.
+- blocked: you cannot go on until a person acts; name the concrete missing prerequisite, and add humanAction when there is a specific question.
 - failed: you tried and it did not work; say what failed and what you tried.
 - dropped: nothing for anyone to do (not reproduced, not a defect, already handled); ends the item without a message.
 humanAction is the one concrete question a person must decide; it reaches the router at once with any state, including progress. Report honestly: a draft is not ready, and a failure is reported as failed.`,

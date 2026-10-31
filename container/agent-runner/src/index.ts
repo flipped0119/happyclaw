@@ -345,6 +345,7 @@ const ASSISTANT_OUTPUT_GUIDELINES = loadPrompt('output.assistant.md');
 const PROACTIVE_OUTPUT_GUIDELINES = loadPrompt('output.proactive.md');
 const WEB_FETCH_GUIDELINES = loadPrompt('web-fetch.md');
 const BACKGROUND_TASK_GUIDELINES = loadPrompt('background-tasks.md');
+const TEAM_BACKGROUND_TASK_GUIDELINES = loadPrompt('background-tasks.team.md');
 const ASSISTANT_DELIVERY_CONTRACT = loadPrompt(
   'delivery-contract.assistant.md',
 );
@@ -636,10 +637,16 @@ const CHANNEL_GUIDELINES: Record<string, string> = (() => {
   return result;
 })();
 
-/** Format guidance for an input from this channel; none for the Web. */
+/**
+ * Format guidance for an input from this channel; none for the Web, and none
+ * for a team role, whose section covers the format and which has no
+ * send_image/send_file the guidance points at.
+ */
 function channelFormatFor(
   context: ChannelTurnContext | undefined,
+  teamRole: ContainerInput['teamRole'],
 ): string | undefined {
+  if (teamRole) return undefined;
   const guidelines = context && CHANNEL_GUIDELINES[context.provider];
   return guidelines ? `${guidelines}\n${CHANNEL_FORMAT_COMMON}` : undefined;
 }
@@ -2005,7 +2012,10 @@ async function runQueryAttempt(
       memory: memorySnapshot,
       ownerProfile,
       channelContext: containerInput.channelContext,
-      channelFormat: channelFormatFor(containerInput.channelContext),
+      channelFormat: channelFormatFor(
+        containerInput.channelContext,
+        containerInput.teamRole,
+      ),
       anchor: shouldAnchorInitialAgentTurn(emitOutput, sourceKindOverride)
         ? agentTurnAnchor
         : undefined,
@@ -2619,7 +2629,10 @@ async function runQueryAttempt(
           memory: memorySnapshot,
           ownerProfile,
           channelContext: queuedChannelContext,
-          channelFormat: channelFormatFor(queuedChannelContext),
+          channelFormat: channelFormatFor(
+            queuedChannelContext,
+            containerInput.teamRole,
+          ),
           anchor: agentTurnAnchor,
         },
         msg.receipt?.deliveryId ||
@@ -2890,14 +2903,23 @@ async function runQueryAttempt(
       : {}),
     ...(agentBuilderEnabled ? { agentBuilder: AGENT_BUILDER_GUIDELINES } : {}),
     ...(teamPrompt ? { team: teamPrompt } : {}),
-    output: proactiveInteractiveContract
-      ? PROACTIVE_OUTPUT_GUIDELINES
-      : ASSISTANT_OUTPUT_GUIDELINES,
+    // A team role speaks through its work tools: its section replaces the
+    // output and delivery contracts, which are built on send_message.
+    ...(teamPrompt
+      ? {}
+      : {
+          output: proactiveInteractiveContract
+            ? PROACTIVE_OUTPUT_GUIDELINES
+            : ASSISTANT_OUTPUT_GUIDELINES,
+        }),
     ...(hasWebTools ? { web: WEB_FETCH_GUIDELINES } : {}),
     ...(backgroundTaskToolsAvailable
-      ? { backgroundTasks: BACKGROUND_TASK_GUIDELINES }
+      ? {
+          backgroundTasks: teamPrompt
+            ? TEAM_BACKGROUND_TASK_GUIDELINES
+            : BACKGROUND_TASK_GUIDELINES,
+        }
       : {}),
-    // A team role replies through its work tools, never send_message.
     ...(teamPrompt
       ? {}
       : {

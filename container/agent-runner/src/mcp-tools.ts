@@ -45,7 +45,7 @@ export interface McpContext {
   ownerProfileEnabled: boolean;
   /** Public reply contract selected by the workspace. */
   interactionMode?: 'assistant' | 'proactive';
-  /** Team mode role: replaces send_message with the role's work tools. */
+  /** Team mode role: replaces the posting tools with the role's work tools. */
   teamRole?: TeamRole;
   /** Mutable correlation id for the user input currently being answered.
    * Cold starts use the triggering message id; IPC turns use the host-issued
@@ -2322,9 +2322,20 @@ Use the skills panel in the UI to find the skill ID (directory name, e.g. "memor
 }
 
 /**
+ * Tools that post to the chat directly. A team-mode session speaks only
+ * through its work tools, so none of these is registered (the host refuses
+ * them from these lanes too).
+ */
+const TEAM_WITHHELD_TOOL_NAMES = new Set([
+  'send_message',
+  'send_image',
+  'send_file',
+  'feishu_send_card',
+]);
+
+/**
  * A team-mode session speaks only through its work tools: the router posts
- * with `work_reply`, a worker acknowledges with `work_ack`. send_message is
- * not registered (the host refuses it from these lanes too).
+ * with `work_reply`, a worker acknowledges with `work_ack`.
  */
 function withTeamTools(
   tools: SdkMcpToolDefinition<any>[],
@@ -2333,7 +2344,9 @@ function withTeamTools(
 ): SdkMcpToolDefinition<any>[] {
   const tasksDir = path.join(ctx.workspaceIpc, 'tasks');
   return [
-    ...tools.filter((definition) => definition.name !== 'send_message'),
+    ...tools.filter(
+      (definition) => !TEAM_WITHHELD_TOOL_NAMES.has(definition.name),
+    ),
     ...createWorkTools(
       teamRole,
       (request, resultPrefix, timeoutMs) =>

@@ -32,6 +32,7 @@ const scratchRoot = fs.mkdtempSync(
 interface MainRequest {
   system: string;
   tools: string[];
+  messages: string;
 }
 
 function systemText(system: unknown): string {
@@ -116,7 +117,11 @@ async function firstMainRequest(
     const chunks: Buffer[] = [];
     request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
     request.on('end', () => {
-      let body: { system?: unknown; tools?: Array<{ name: string }> } = {};
+      let body: {
+        system?: unknown;
+        tools?: Array<{ name: string }>;
+        messages?: unknown;
+      } = {};
       try {
         body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       } catch {
@@ -126,6 +131,7 @@ async function firstMainRequest(
         captured = {
           system: systemText(body.system),
           tools: body.tools.map((tool) => tool.name),
+          messages: JSON.stringify(body.messages ?? []),
         };
         fs.writeFileSync(path.join(inputDir, '_close'), '');
       }
@@ -157,6 +163,12 @@ async function firstMainRequest(
       isHome: false,
       isAdminHome: false,
       interactionMode: 'proactive',
+      // A Feishu input, so the plain session gets the channel's format note.
+      channelContext: {
+        schemaVersion: 1,
+        provider: 'feishu',
+        sourceJid: 'feishu:oc_team_role',
+      },
       ...(teamRole ? { teamRole } : {}),
     }),
   );
@@ -175,6 +187,13 @@ const WORKER_TOOLS = ['work_report', 'work_ack', 'work_handback'].map(
   (name) => `mcp__happyclaw__${name}`,
 );
 const FILE_EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
+/** Tools that post to the chat directly; a team session has none of them. */
+const POSTING_TOOLS = [
+  'send_message',
+  'send_image',
+  'send_file',
+  'feishu_send_card',
+].map((name) => `mcp__happyclaw__${name}`);
 
 const runs: Record<string, MainRequest> = {};
 
@@ -227,33 +246,29 @@ describe('Agent Runner team roles, as the model sees them', () => {
   test('the router routes and replies: work tools in, send_message, AskUserQuestion and edits out', () => {
     expect(toolDelta(runs.router)).toEqual({
       added: [...ROUTER_TOOLS].sort(),
-      removed: [
-        'AskUserQuestion',
-        ...FILE_EDIT_TOOLS,
-        'mcp__happyclaw__send_message',
-      ].sort(),
+      removed: ['AskUserQuestion', ...FILE_EDIT_TOOLS, ...POSTING_TOOLS].sort(),
     });
   });
 
   test('a writable worker keeps its edit tools and loses only send_message and AskUserQuestion', () => {
     expect(toolDelta(runs.writer)).toEqual({
       added: [...WORKER_TOOLS].sort(),
-      removed: ['AskUserQuestion', 'mcp__happyclaw__send_message'].sort(),
+      removed: ['AskUserQuestion', ...POSTING_TOOLS].sort(),
     });
   });
 
   test('a read-only worker also runs without the edit tools', () => {
     expect(toolDelta(runs.reader)).toEqual({
       added: [...WORKER_TOOLS].sort(),
-      removed: [
-        'AskUserQuestion',
-        ...FILE_EDIT_TOOLS,
-        'mcp__happyclaw__send_message',
-      ].sort(),
+      removed: ['AskUserQuestion', ...FILE_EDIT_TOOLS, ...POSTING_TOOLS].sort(),
     });
   });
 
-  test('each role gets its own section before the output contract and no delivery contract', () => {
+  test('each role gets its own section and no guidance built on send_message', () => {
+    expect(runs.plain.system).toContain('<background-tasks>');
+    expect(runs.plain.messages).toContain(
+      '<channel_format provider=\\"feishu\\">',
+    );
     for (const [run, own, other] of [
       [runs.router, 'team-router', 'team-worker'],
       [runs.writer, 'team-worker', 'team-router'],
@@ -261,10 +276,16 @@ describe('Agent Runner team roles, as the model sees them', () => {
     ] as const) {
       expect(run.system).toContain(`<${own}>`);
       expect(run.system).not.toContain(`<${other}>`);
+      expect(run.system).not.toContain('<output-contract>');
       expect(run.system).not.toContain('<delivery-contract>');
-      expect(run.system.indexOf(`</${own}>`)).toBeLessThan(
-        run.system.indexOf('<output-contract>'),
-      );
+      // The background guidance is the team version.
+      expect(run.system).toContain('<background-tasks>');
+      expect(run.system).toContain('mcp__happyclaw__work_report');
+      for (const tool of POSTING_TOOLS) {
+        expect(run.system).not.toContain(tool.replace('mcp__happyclaw__', ''));
+      }
+      // The channel note points at send_image/send_file; a team role has neither.
+      expect(run.messages).not.toContain('<channel_format');
       // Everything ahead of the team section is the session without a role.
       const prefix = run.system.slice(0, run.system.indexOf(`<${own}>`));
       expect(runs.plain.system.startsWith(prefix)).toBe(true);

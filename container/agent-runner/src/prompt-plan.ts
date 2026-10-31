@@ -52,13 +52,14 @@ export interface HappyClawPromptSources {
   agentBuilder?: string;
   /**
    * Team mode: the router's or the worker's contract. It takes the place of
-   * the delivery contract, which is built on send_message.
+   * the output and delivery contracts, which are built on send_message.
    */
   team?: {
     id: 'team-router' | 'team-worker';
     text: string;
   };
-  output: string;
+  /** Required, except that a team section replaces it. */
+  output?: string;
   web?: string;
   backgroundTasks?: string;
   deliveryContract?: string;
@@ -297,15 +298,18 @@ export function buildHappyClawPromptPlan(
     });
   }
 
-  inputs.push({
-    id: 'output',
-    version: 1,
-    scope: 'main',
-    owner: 'platform',
-    required: true,
-    condition: 'always',
-    text: wrap('output-contract', sources.output),
-  });
+  // A team section is the session's output contract.
+  if (!sources.team) {
+    inputs.push({
+      id: 'output',
+      version: 1,
+      scope: 'main',
+      owner: 'platform',
+      required: true,
+      condition: 'always',
+      text: wrap('output-contract', sources.output ?? ''),
+    });
+  }
 
   if (sources.web) {
     inputs.push({

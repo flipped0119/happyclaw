@@ -35,6 +35,14 @@ const READER: TeamRole = {
   writable: false,
 };
 
+/** Tools that post to the chat directly; a team session has none of them. */
+const POSTING_TOOLS = [
+  'send_message',
+  'send_image',
+  'send_file',
+  'feishu_send_card',
+];
+
 const roots: string[] = [];
 const clients: Client[] = [];
 
@@ -157,21 +165,22 @@ describe('team-mode tool registration', () => {
     }
   });
 
-  test('the router swaps send_message for the router tools', () => {
+  test('the router swaps the posting tools for the router tools', () => {
     const plain = names();
+    expect(plain).toEqual(expect.arrayContaining(POSTING_TOOLS));
     expect(names(ROUTER)).toEqual([
-      ...plain.filter((name) => name !== 'send_message'),
+      ...plain.filter((name) => !POSTING_TOOLS.includes(name)),
       'work_route',
       'work_reply',
       'work_list',
     ]);
   });
 
-  test('a worker, writable or not, swaps send_message for the worker tools', () => {
+  test('a worker, writable or not, swaps the posting tools for the worker tools', () => {
     const plain = names();
     for (const role of [WRITER, READER]) {
       expect(names(role)).toEqual([
-        ...plain.filter((name) => name !== 'send_message'),
+        ...plain.filter((name) => !POSTING_TOOLS.includes(name)),
         'work_ack',
         'work_report',
         'work_handback',
@@ -232,17 +241,18 @@ describe('team-mode PromptPlan', () => {
     web: 'web',
   };
 
-  test('a team section sits right before the output contract', () => {
+  test("a team section takes the output contract's place", () => {
+    const { output: _output, ...rest } = sources;
     const plan = buildHappyClawPromptPlan({
-      ...sources,
+      ...rest,
       team: { id: 'team-router', text: 'ROUTER_MARKER' },
     });
+    expect(plan.errors).toEqual([]);
     expect(plan.blocks.map((block) => block.id)).toEqual([
       'interaction',
       'security-rules',
       'memory-system.workspace',
       'team-router',
-      'output',
       'web-fetch',
     ]);
     expect(plan.blocks[3]).toMatchObject({
@@ -252,6 +262,13 @@ describe('team-mode PromptPlan', () => {
       condition: 'team mode router session',
       text: '<team-router>\nROUTER_MARKER\n</team-router>',
     });
+  });
+
+  test('without a team section the output contract stays required', () => {
+    const { output: _output, ...rest } = sources;
+    expect(buildHappyClawPromptPlan(rest).errors).toEqual([
+      'required prompt block is empty: output',
+    ]);
   });
 
   test('without a team section the plan is what it was', () => {
