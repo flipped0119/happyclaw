@@ -32,7 +32,9 @@ import {
 import { useAuthStore } from '../../stores/auth';
 import { EmojiAvatar } from '../common/EmojiAvatar';
 import { FinalMarkdown } from './StreamingMarkdown';
-import { PermissionAlert, TracePanel } from './ExecutionTrace';
+import { PermissionAlert, TracePanel, countTraceTools } from './ExecutionTrace';
+import { ProcessSummaryRow } from './ProcessSummaryRow';
+import { thinkingLabel } from '../../utils/thinking-duration';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ProcessCard, hasProcess } from './ProcessCard';
 import { LazyTurnTrace } from './LazyTurnTrace';
@@ -97,6 +99,11 @@ interface MessageBubbleProps {
   agentAvatarUrl?: string | null;
   agentAvatarEmoji?: string | null;
   agentAvatarColor?: string | null;
+  /**
+   * The newest reply in the list: a phone shows the action row under it
+   * only, the others keep theirs behind a long press.
+   */
+  latest?: boolean;
 }
 
 interface MessageAttachment {
@@ -290,6 +297,7 @@ export const MessageBubble = memo(
     agentAvatarUrl,
     agentAvatarEmoji,
     agentAvatarColor,
+    latest = true,
   }: MessageBubbleProps) {
     const [copied, setCopied] = useState(false);
     const [lightboxState, setLightboxState] = useState<{
@@ -464,6 +472,18 @@ export const MessageBubble = memo(
           />
         </>
       );
+    // A phone says the reasoning and the trace on one row, as the timeline
+    // layout's card does: 「思考 12 秒 · 工具 5」.
+    const processRow =
+      isPhone && hasReasoning && executionTrace
+        ? [
+            thinkingLabel(thinkingDurationMs),
+            countTraceTools(traceEvents!) > 0 &&
+              `工具 ${countTraceTools(traceEvents!)}`,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : null;
     // The streaming card, once settled, is shaped like this: a denied tool
     // call above the summary row, the answer below.
     const settledCard = settledSteps && (
@@ -829,6 +849,7 @@ export const MessageBubble = memo(
               {renderImages(cn('justify-end', hasOnlyImages && 'mb-0'))}
               {!hasOnlyImages && (
                 <div
+                  data-user-bubble=""
                   className="rounded-[1.25rem] bg-muted px-4 py-2.5 text-foreground phone:rounded-xl phone:border phone:border-surface-border phone:bg-surface-raised phone:p-3"
                   {...pressToOpenMenu}
                 >
@@ -897,15 +918,42 @@ export const MessageBubble = memo(
         {/* Claude-style: no card container, direct content */}
         <div className="overflow-hidden font-serif">
           {settledCard}
-          {!settledSteps && hasReasoning && (
-            <ThinkingBlock
-              text={thinkingContent ?? ''}
-              title={thinkingTitle}
-              durationMs={thinkingDurationMs}
-              withheld={process !== 'full'}
-              groupJid={markdownJid}
-              defaultExpanded={openThinking}
-            />
+          {processRow ? (
+            <ProcessSummaryRow
+              label={processRow}
+              defaultOpen={openThinking || openTrace}
+            >
+              <ThinkingBlock
+                text={thinkingContent ?? ''}
+                title={thinkingTitle}
+                durationMs={thinkingDurationMs}
+                withheld={process !== 'full'}
+                groupJid={markdownJid}
+                defaultExpanded
+              />
+              {traceEvents && (
+                <>
+                  <PermissionAlert traceEvents={traceEvents} />
+                  <TracePanel
+                    traceEvents={traceEvents}
+                    taskCount={0}
+                    defaultExpanded
+                  />
+                </>
+              )}
+            </ProcessSummaryRow>
+          ) : (
+            !settledSteps &&
+            hasReasoning && (
+              <ThinkingBlock
+                text={thinkingContent ?? ''}
+                title={thinkingTitle}
+                durationMs={thinkingDurationMs}
+                withheld={process !== 'full'}
+                groupJid={markdownJid}
+                defaultExpanded={openThinking}
+              />
+            )
           )}
           {traceOnServer && (
             <LazyTurnTrace
@@ -917,7 +965,7 @@ export const MessageBubble = memo(
             />
           )}
 
-          {executionTrace}
+          {!processRow && executionTrace}
 
           {completedWorkflowRuns?.map((run) => (
             <WorkflowRunCard key={run.taskId} run={run} />
@@ -938,7 +986,13 @@ export const MessageBubble = memo(
 
         {/* Action row: usage summary always (faint), actions on hover. A
             phone has the time here and the usage behind 「详情」. */}
-        <div className="mt-1.5 flex h-7 items-center gap-1.5 pointer-coarse:h-10 phone:h-11 phone:gap-0">
+        <div
+          className={cn(
+            'mt-1.5 flex h-7 items-center gap-1.5 pointer-coarse:h-10 phone:h-11 phone:gap-0',
+            // Jarvis keeps a reply bare: a long press has the same actions.
+            !latest && !incompleteBadge && 'phone:hidden',
+          )}
+        >
           {incompleteBadge}
           {showTime && !proactive && (
             <span

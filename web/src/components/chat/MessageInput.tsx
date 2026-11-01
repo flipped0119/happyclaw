@@ -373,9 +373,16 @@ export const MessageInput = memo(function MessageInput({
     [persistDraft],
   );
 
+  // While a run is on, the text goes with it (Jarvis's 「补充说明（会排队
+  // 发送）」): the placeholder says how.
+  const shownPlaceholder = isRunning
+    ? followUpMode === 'steer'
+      ? '补充说明（会引导当前运行）'
+      : '补充说明（会排队发送）'
+    : placeholder;
   const { editor, snapshot, setPopupAria } = useComposerEditor({
     content: initial.doc,
-    placeholder,
+    placeholder: shownPlaceholder,
     editable: !disabled,
     handlers: {
       onKeyDown: (view, event) => handleEditorKeyDown(view, event),

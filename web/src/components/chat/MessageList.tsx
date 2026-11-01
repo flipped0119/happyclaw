@@ -471,6 +471,16 @@ export const MessageList = memo(function MessageList({
     });
     return items;
   }, [timelineMessages, hasWorkflowCard, today]);
+  // The newest reply: a phone shows the action row under it alone.
+  const latestReplyId = useMemo(() => {
+    for (let i = flatMessages.length - 1; i >= 0; i--) {
+      const item = flatMessages[i];
+      if (item.type === 'message' && item.content.is_from_me) {
+        return item.content.id;
+      }
+    }
+    return null;
+  }, [flatMessages]);
 
   // A finished reply replaces its streaming block in one store update (the
   // block is held, settled, until the final message arrives). The new row is
@@ -1454,6 +1464,7 @@ export const MessageList = memo(function MessageList({
                         agentAvatarUrl={agentAvatarUrl}
                         agentAvatarEmoji={agentAvatarEmoji}
                         agentAvatarColor={agentAvatarColor}
+                        latest={message.id === latestReplyId}
                       />
                     </ErrorBoundary>
                   </div>

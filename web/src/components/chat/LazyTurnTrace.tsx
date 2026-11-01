@@ -3,6 +3,7 @@ import { ChevronRight, ListTree, Loader2, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useChatStore, type Message } from '../../stores/chat';
 import { useStreamLayout } from '../../hooks/useStreamLayout';
+import { useIsPhone } from '../layout/phone';
 
 /** The same collapsed row the loaded reasoning and trace use, as a button. */
 const ROW_CLASS =
@@ -96,7 +97,8 @@ function LazyRow({
  * caches hold the turn. The timeline layout has one row, "处理过程": whether
  * the server kept the ordered steps (the settled card, opened) or only the
  * reasoning and the trace of an older turn (their two rows) is known once it
- * is loaded. The classic layout always has the two rows.
+ * is loaded. The classic layout has the two rows, but on a phone, whose
+ * screen they would take, it has the one row too.
  */
 export function LazyTurnTrace({
   message,
@@ -122,6 +124,7 @@ export function LazyTurnTrace({
   pending?: boolean;
 }) {
   const { layout } = useStreamLayout();
+  const isPhone = useIsPhone();
   const status = useChatStore((s) => s.turnTraceStatus[message.id]);
   // Loaded, and the bubble still asks: the steps hold nothing this layout or
   // level shows, so there is nothing left to load (the row would only spin).
@@ -136,7 +139,7 @@ export function LazyTurnTrace({
     onRequest(row);
     void loadTurnTrace(message);
   };
-  if (layout === 'timeline' || stepsOnly) {
+  if (layout === 'timeline' || stepsOnly || isPhone) {
     return (
       <LazyRow
         icon={Sparkles}

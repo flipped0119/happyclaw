@@ -302,7 +302,8 @@ function BareComposer() {
     >
       <div className="min-h-0 flex-1 overflow-y-auto px-4">
         {askCards && (
-          <div className="mx-auto max-w-3xl pt-4">
+          // Room under the floating dock, as the message list keeps.
+          <div className="mx-auto max-w-3xl pt-4 pb-[60vh]">
             <AskUserQuestionCard
               toolUseId="ask-single"
               questions={[

@@ -1,11 +1,19 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  MessageCircleQuestion,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { StepQuestion } from '../../lib/stream-steps';
 import { useAskAnswersStore, type AskProgress } from '../../stores/ask-answers';
 import { useShellStore } from '../../stores/shell';
 
 const NO_PROGRESS: AskProgress = { picked: [], own: [], index: 0 };
+
+/** An option the model recommends: 「Swift Testing (Recommended)」. */
+const RECOMMENDED = /\s*[（(](?:recommended|推荐)[)）]\s*$/i;
 
 /**
  * AskUserQuestion options. The runner has no interactive answer channel, so
@@ -137,8 +145,13 @@ export function AskUserQuestionCard({
       ref={cardRef}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="mt-2 mb-2 rounded-lg outline-none bg-surface-raised p-3 font-sans ring-1 ring-surface-border"
+      className="mt-2 mb-2 rounded-lg bg-surface-raised p-3 font-sans ring-1 ring-surface-border outline-none phone:rounded-2xl phone:p-3.5"
     >
+      {/* A phone says who asks, as Jarvis's 「Claude 在问你」 does. */}
+      <div className="mb-1.5 hidden items-center gap-1.5 text-caption font-medium text-primary-text phone:flex">
+        <MessageCircleQuestion className="size-3.5" aria-hidden />
+        在问你
+      </div>
       {total > 1 && (
         <div className="mb-2 flex items-center gap-2 text-caption text-muted-foreground">
           <span className="tabular-nums" data-hc-ask-step="">
@@ -165,7 +178,7 @@ export function AskUserQuestionCard({
         key={at}
         className="animate-in duration-200 fade-in slide-in-from-right-1 motion-reduce:animate-none"
       >
-        <div className="mb-2 text-body font-medium break-words text-foreground">
+        <div className="mb-2 text-body font-medium break-words text-foreground phone:mb-3 phone:text-base phone:font-semibold">
           {q.question}
           {q.multiSelect && (
             <span className="ml-1.5 text-caption font-normal text-muted-foreground">
@@ -173,10 +186,13 @@ export function AskUserQuestionCard({
             </span>
           )}
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        {/* A phone lists the options as numbered rows in one group. */}
+        <div className="flex flex-wrap gap-1.5 phone:flex-col phone:gap-0 phone:divide-y phone:divide-surface-border phone:overflow-hidden phone:rounded-xl phone:bg-muted">
           {q.options.map((label, oi) => {
             const on = chosen.includes(label);
             const description = q.descriptions?.[oi];
+            const recommended = RECOMMENDED.test(label);
+            const shown = recommended ? label.replace(RECOMMENDED, '') : label;
             return (
               <button
                 key={oi}
@@ -186,31 +202,61 @@ export function AskUserQuestionCard({
                 onClick={() => choose(label)}
                 data-hc-question-option=""
                 className={cn(
-                  'inline-flex min-h-7 max-w-full cursor-pointer flex-col items-start justify-center rounded-md px-2.5 py-1 text-left text-caption font-medium break-words ring-1 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 pointer-coarse:min-h-11 pointer-coarse:py-2',
+                  'inline-flex min-h-7 max-w-full cursor-pointer items-center rounded-md px-2.5 py-1 text-left text-caption font-medium break-words ring-1 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 pointer-coarse:min-h-11 pointer-coarse:py-2',
+                  'phone:min-h-12 phone:w-full phone:gap-3 phone:rounded-none phone:px-3 phone:py-2.5 phone:text-body phone:ring-0 phone:focus-visible:ring-inset',
                   on
-                    ? 'bg-foreground text-background ring-foreground'
-                    : 'bg-muted text-foreground ring-surface-border hover:bg-surface-hover',
+                    ? 'bg-foreground text-background ring-foreground phone:bg-primary/12 phone:text-foreground'
+                    : 'bg-muted text-foreground ring-surface-border hover:bg-surface-hover phone:bg-transparent',
                 )}
               >
-                <span>
-                  {on && (
-                    <Check
-                      className="mr-1 inline size-3.5 align-[-0.15em]"
-                      aria-hidden
-                    />
+                {/* The number (by CSS, out of the text), a check once picked. */}
+                <span
+                  aria-hidden
+                  data-n={oi + 1}
+                  className={cn(
+                    'hidden size-6 shrink-0 items-center justify-center rounded-full text-micro font-medium tabular-nums phone:flex',
+                    on
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background text-muted-foreground before:content-[attr(data-n)]',
                   )}
-                  {label}
+                >
+                  {on && <Check className="size-3.5" strokeWidth={2.6} />}
                 </span>
-                {description && (
-                  <span
-                    className={cn(
-                      'mt-0.5 font-normal',
-                      on ? 'text-background/75' : 'text-muted-foreground',
+                <span className="flex min-w-0 flex-col items-start phone:flex-1">
+                  <span>
+                    {on && (
+                      <Check
+                        className="mr-1 inline size-3.5 align-[-0.15em] phone:hidden"
+                        aria-hidden
+                      />
                     )}
-                  >
-                    {description}
+                    {shown}
+                    {recommended && (
+                      <span
+                        className={cn(
+                          'ml-1.5 inline-flex rounded-full px-1.5 align-[0.1em] text-micro font-medium',
+                          on
+                            ? 'bg-background/20 phone:bg-primary/15 phone:text-primary-text'
+                            : 'bg-primary/12 text-primary-text',
+                        )}
+                      >
+                        推荐
+                      </span>
+                    )}
                   </span>
-                )}
+                  {description && (
+                    <span
+                      className={cn(
+                        'mt-0.5 font-normal phone:text-caption',
+                        on
+                          ? 'text-background/75 phone:text-muted-foreground'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {description}
+                    </span>
+                  )}
+                </span>
               </button>
             );
           })}
@@ -224,6 +270,8 @@ export function AskUserQuestionCard({
             className={cn(
               'h-7 w-28 min-w-0 rounded-md bg-transparent px-2.5 text-caption text-foreground ring-1 ring-surface-border transition-[width,box-shadow] outline-none placeholder:text-muted-foreground focus:w-48 focus-visible:ring-2 focus-visible:ring-ring/40 pointer-coarse:h-11 pointer-coarse:text-base',
               (own[at] ?? '').trim() && 'w-48 ring-foreground/60',
+              // A phone: the last row of the list, its full width.
+              'phone:h-12 phone:w-full phone:rounded-none phone:pl-12 phone:ring-0 phone:focus:w-full phone:focus-visible:ring-2 phone:focus-visible:ring-inset',
             )}
           />
         </div>

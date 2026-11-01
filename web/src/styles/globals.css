@@ -462,6 +462,15 @@ html.theme-ios {
   --inline-code-text: #0066d6;
 }
 
+/* Jarvis's bubbles: the user's in a pale blue, a deep one in the dark. */
+html.theme-ios [data-user-bubble] {
+  border-color: transparent;
+  background-color: #dceaff;
+}
+html.dark.theme-ios [data-user-bubble] {
+  background-color: #1d3557;
+}
+
 html.dark.theme-ios {
   /* iOS's elevated dark grays (sheets, popovers) rather than pure black:
      black reads as a hole on a phone's page. */

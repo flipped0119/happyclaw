@@ -1165,7 +1165,8 @@ test.describe('touch composer', () => {
         getComputedStyle(element).borderBottomWidth,
       ]),
     ).toEqual(['absolute', '0px']);
-    // A round 40px back button; the title centred at 16px, semibold.
+    // A round 40px back button; the title centred at 15px, semibold, in
+    // its capsule.
     const back = page.getByRole('button', { name: '返回' });
     expect(await back.boundingBox()).toMatchObject({ width: 40, height: 40 });
     expect(
@@ -1182,7 +1183,7 @@ test.describe('touch composer', () => {
         getComputedStyle(element).fontSize,
         getComputedStyle(element).fontWeight,
       ]),
-    ).toEqual(['16px', '600']);
+    ).toEqual(['15px', '600']);
 
     // The run state shows in the streaming area, not the header; stop is
     // the dock's 34px solid button.
@@ -1404,6 +1405,14 @@ test.describe('AskUserQuestion cards', () => {
     const cards = page.locator('[data-hc-ask-card]');
     const single = cards.nth(0);
     const steps = cards.nth(1);
+    // A phone lists the options as rows: the card is taller than the stub
+    // list, and a button scrolled only into view sits under the dock.
+    const press = async (button: Locator) => {
+      await button.evaluate((element) =>
+        element.scrollIntoView({ block: 'center' }),
+      );
+      await button.click();
+    };
 
     // One single-choice question: the tap fills the composer, once; another
     // tap replaces it.
@@ -1420,14 +1429,14 @@ test.describe('AskUserQuestion cards', () => {
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('Backspace');
     await expect(steps).toContainText('问题 1/3');
-    await steps.getByRole('button', { name: '看展' }).click();
+    await press(steps.getByRole('button', { name: '看展' }));
     await expect(steps).toContainText('问题 2/3');
-    await steps.getByRole('button', { name: '相机' }).click();
-    await steps.getByRole('button', { name: '伞' }).click();
+    await press(steps.getByRole('button', { name: '相机' }));
+    await press(steps.getByRole('button', { name: '伞' }));
     await expect(steps).toContainText('问题 2/3');
-    await steps.getByRole('button', { name: '下一题' }).click();
-    await steps.getByRole('button', { name: '10 点' }).click();
-    await steps.getByRole('button', { name: '填入输入框' }).click();
+    await press(steps.getByRole('button', { name: '下一题' }));
+    await press(steps.getByRole('button', { name: '10 点' }));
+    await press(steps.getByRole('button', { name: '填入输入框' }));
     await expect
       .poll(() => composerText(page))
       .toBe(
@@ -1436,8 +1445,8 @@ test.describe('AskUserQuestion cards', () => {
     await expect(steps.getByRole('button', { name: '已填入' })).toBeDisabled();
 
     // A changed answer takes the place of the one filled before.
-    await steps.getByRole('button', { name: '8 点' }).click();
-    await steps.getByRole('button', { name: '填入输入框' }).click();
+    await press(steps.getByRole('button', { name: '8 点' }));
+    await press(steps.getByRole('button', { name: '填入输入框' }));
     await expect
       .poll(() => composerText(page))
       .toBe(
@@ -1451,7 +1460,7 @@ test.describe('AskUserQuestion cards', () => {
     await expect(
       steps.getByRole('button', { name: '填入输入框' }),
     ).toBeEnabled();
-    await steps.getByRole('button', { name: '填入输入框' }).click();
+    await press(steps.getByRole('button', { name: '填入输入框' }));
     await expect
       .poll(() => composerText(page))
       .toBe(

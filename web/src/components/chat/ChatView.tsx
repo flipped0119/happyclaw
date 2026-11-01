@@ -1426,8 +1426,17 @@ export function ChatView({ groupJid, onBack, headerLeft }: ChatViewProps) {
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <nav
               aria-label="当前对话"
-              className="flex min-w-0 items-center gap-1 text-body phone:absolute phone:inset-x-[5.75rem] phone:justify-center phone:text-base phone:leading-[22px] phone:font-semibold"
+              // Jarvis's title: a dot while the conversation runs; a phone
+              // puts it in a capsule.
+              className="flex min-w-0 items-center gap-1 text-body phone:absolute phone:left-1/2 phone:h-8 phone:max-w-[calc(100%-11.5rem)] phone:-translate-x-1/2 phone:justify-center phone:rounded-full phone:bg-foreground/[0.06] phone:px-2.5 phone:text-[15px] phone:leading-5 phone:font-semibold"
             >
+              {currentContextWaiting && (
+                <span
+                  aria-hidden="true"
+                  data-running-dot=""
+                  className="size-2 shrink-0 animate-pulse rounded-full bg-warning motion-reduce:animate-none"
+                />
+              )}
               {activeAgentTab && isConversationTab ? (
                 <button
                   type="button"
